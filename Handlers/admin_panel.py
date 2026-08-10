@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.filters.callback_data import CallbackData
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from DB.database import Database
 from config import settings
@@ -14,6 +15,18 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 router = Router(name="admin_panel")
+
+STATUS_LABELS = {
+    "new": "🆕 Новый",
+    "notified": "📨 Уведомлён",
+    "phone_requested": "📞 Запрошен телефон",
+    "phone_received": "✅ Телефон получен",
+    "closed": "🔒 Закрыт",
+}
+
+
+class ClientToggleCallback(CallbackData, prefix="client_toggle"):
+    ig_business_id: str
 
 
 def _is_owner(message: Message) -> bool:
@@ -76,23 +89,89 @@ async def billing_handler(message: Message, command: CommandObject, db: Database
     await message.answer(text)
 
 
-@router.message(Command("clients"))
-async def clients_handler(message: Message, db: Database) -> None:
-    if not _is_owner(message):
-        return
-
+async def _build_clients_view(db: Database) -> tuple[str, InlineKeyboardMarkup | None]:
     clients = await db.list_clients()
     if not clients:
-        await message.answer("Клиентов пока нет. Добавь через /add_client")
-        return
+        return "Клиентов пока нет. Добавь через /add_client", None
 
     now = datetime.now(timezone.utc)
     lines = ["👥 <b>Клиенты LeadArmor</b>\n"]
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
     for client in clients:
         active_mark = "🟢" if client["is_active"] else "🔴"
         lines.append(
             f"{active_mark} <b>{html.escape(client['name'])}</b> "
             f"(<code>{client['ig_business_id']}</code>) — {_compute_status_line(client, now)}"
+        )
+        toggle_text = "🔴 Деактивировать" if client["is_active"] else "🟢 Активировать"
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                text=f"{toggle_text}: {client['name']}",
+                callback_data=ClientToggleCallback(ig_business_id=client["ig_business_id"]).pack(),
+            )
+        ])
+
+    if settings.GOOGLE_SHEETS_SPREADSHEET_ID:
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                text="📊 Открыть Google Sheets",
+                url=f"https://docs.google.com/spreadsheets/d/{settings.GOOGLE_SHEETS_SPREADSHEET_ID}/edit",
+            )
+        ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+
+@router.message(Command("clients"))
+async def clients_handler(message: Message, db: Database) -> None:
+    if not _is_owner(message):
+        return
+
+    text, keyboard = await _build_clients_view(db)
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(ClientToggleCallback.filter())
+async def toggle_client_handler(
+    callback: CallbackQuery,
+    callback_data: ClientToggleCallback,
+    db: Database,
+) -> None:
+    if callback.from_user is None or callback.from_user.id != settings.MANAGER_CHAT_ID:
+        await callback.answer("Только для владельца", show_alert=True)
+        return
+
+    updated = await db.toggle_client_active(callback_data.ig_business_id)
+    if updated is None:
+        await callback.answer("Клиент не найден", show_alert=True)
+        return
+
+    status_text = "включён 🟢" if updated["is_active"] else "выключен 🔴"
+    await callback.answer(f"{updated['name']} {status_text}")
+
+    text, keyboard = await _build_clients_view(db)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+
+
+@router.message(Command("recent"))
+async def recent_leads_handler(message: Message, db: Database) -> None:
+    if not _is_owner(message):
+        return
+
+    leads = await db.get_recent_leads(limit=10)
+    if not leads:
+        await message.answer("Лидов пока нет")
+        return
+
+    lines = ["🕒 <b>Последние 10 лидов</b>\n"]
+    for lead in leads:
+        source = "🎯" if lead["post_type"] == "ad" else "🌿"
+        phone = lead["phone_number"] or "—"
+        status_label = STATUS_LABELS.get(lead["status"], lead["status"])
+        username = html.escape(lead["ig_username"]) if lead["ig_username"] else "?"
+        lines.append(
+            f"{source} @{username} ({html.escape(lead['client_name'])}) — "
+            f"{status_label}, тел: {phone} — {lead['created_at']:%d.%m %H:%M}"
         )
     await message.answer("\n".join(lines))
 

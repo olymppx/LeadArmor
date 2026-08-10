@@ -275,9 +275,37 @@ class Database:
                   AND clients.ig_business_id = $1
                   AND leads.ig_user_id = $2
                   AND leads.status IN ('notified', 'phone_requested')
-                RETURNING leads.id, leads.client_id, leads.ig_username, clients.manager_chat_id;
+                RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
+                          clients.manager_chat_id, clients.name AS client_name;
                 """,
                 ig_business_id,
                 ig_user_id,
                 phone_number,
+            )
+
+    async def toggle_client_active(self, ig_business_id: str) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                UPDATE clients SET is_active = NOT is_active
+                WHERE ig_business_id = $1
+                RETURNING name, ig_business_id, is_active
+                """,
+                ig_business_id,
+            )
+
+    async def get_recent_leads(self, limit: int = 10) -> list[asyncpg.Record]:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT leads.ig_username, leads.post_type, leads.phone_number,
+                       leads.status, leads.created_at, clients.name AS client_name
+                FROM leads
+                JOIN clients ON clients.id = leads.client_id
+                ORDER BY leads.created_at DESC
+                LIMIT $1
+                """,
+                limit,
             )

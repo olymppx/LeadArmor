@@ -69,9 +69,8 @@ async def hide_comment(session: aiohttp.ClientSession, comment_id: str, access_t
         return False
 
 PRIVATE_REPLY_TEXT = (
-    "Здравствуйте! Спасибо за проявленный интерес. "
-    "Пожалуйста, оставьте ваш номер телефона прямо здесь в Директе, "
-    "и наш менеджер моментально свяжется с вами в Telegram!"
+    "Agar siz shu maxsulotni sotib olmoqchi bo'lsangiz nomer "
+    "telefoningizni qoldiring va biz sizga bog'lanamiz!"
 )
 
 # Требует в Meta App Dashboard одобренных прав instagram_business_basic,

@@ -5,6 +5,7 @@ import re
 
 from aiogram import Bot
 
+from API.sheets import append_confirmed_lead
 from DB.database import Database
 from Handlers.manager_alerts import notify_manager_about_phone_received
 
@@ -69,6 +70,13 @@ async def process_direct_message(
     logger.info(
         "Лид #%s (@%s) оставил номер телефона в Директе: %s",
         updated_lead["id"], updated_lead["ig_username"], phone_number,
+    )
+
+    await append_confirmed_lead(
+        client_name=updated_lead["client_name"],
+        ig_username=updated_lead["ig_username"],
+        phone_number=phone_number,
+        source=updated_lead["post_type"],
     )
 
     await notify_manager_about_phone_received(
