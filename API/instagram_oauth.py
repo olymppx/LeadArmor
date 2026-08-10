@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import logging
+from urllib.parse import urlencode
+
+import aiohttp
+from aiogram import Bot
+from aiohttp import web
+
+from DB.database import Database
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+INSTAGRAM_AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize"
+INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token"
+GRAPH_INSTAGRAM_BASE = "https://graph.instagram.com"
+
+OAUTH_SCOPES = ",".join(settings.REQUIRED_META_PERMISSIONS)
+
+
+def sign_state(tg_chat_id: int) -> str:
+    signature = hmac.new(
+        settings.META_APP_SECRET.encode("utf-8"),
+        str(tg_chat_id).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{tg_chat_id}.{signature}"
+
+
+def verify_state(state: str) -> int | None:
+    try:
+        tg_chat_id_raw, signature = state.split(".", 1)
+    except ValueError:
+        return None
+
+    if not tg_chat_id_raw.lstrip("-").isdigit():
+        return None
+
+    expected = hmac.new(
+        settings.META_APP_SECRET.encode("utf-8"),
+        tg_chat_id_raw.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        return None
+
+    return int(tg_chat_id_raw)
+
+
+def build_authorize_url(tg_chat_id: int) -> str:
+    params = {
+        "enable_fb_login": "0",
+        "force_authentication": "1",
+        "client_id": settings.META_INSTAGRAM_APP_ID,
+        "redirect_uri": settings.META_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": OAUTH_SCOPES,
+        "state": sign_state(tg_chat_id),
+    }
+    return f"{INSTAGRAM_AUTHORIZE_URL}?{urlencode(params)}"
+
+
+async def exchange_code_for_token(session: aiohttp.ClientSession, code: str) -> dict | None:
+    data = {
+        "client_id": settings.META_INSTAGRAM_APP_ID,
+        "client_secret": settings.META_INSTAGRAM_APP_SECRET,
+        "grant_type": "authorization_code",
+        "redirect_uri": settings.META_OAUTH_REDIRECT_URI,
+        "code": code,
+    }
+    async with session.post(INSTAGRAM_TOKEN_URL, data=data) as resp:
+        payload = await resp.json(content_type=None)
+        if resp.status != 200:
+            logger.error("Обмен code на токен не удался (HTTP %s): %s", resp.status, payload)
+            return None
+        entries = payload.get("data") or [payload]
+        if not entries or "access_token" not in entries[0]:
+            logger.error("Некорректный ответ при обмене code на токен: %s", payload)
+            return None
+        return entries[0]
+
+
+async def exchange_for_long_lived_token(session: aiohttp.ClientSession, short_lived_token: str) -> str | None:
+    params = {
+        "grant_type": "ig_exchange_token",
+        "client_secret": settings.META_INSTAGRAM_APP_SECRET,
+        "access_token": short_lived_token,
+    }
+    async with session.get(f"{GRAPH_INSTAGRAM_BASE}/access_token", params=params) as resp:
+        payload = await resp.json(content_type=None)
+        if resp.status != 200 or "access_token" not in payload:
+            logger.error("Обмен на long-lived токен не удался (HTTP %s): %s", resp.status, payload)
+            return None
+        return payload["access_token"]
+
+
+async def fetch_ig_profile(session: aiohttp.ClientSession, access_token: str) -> dict | None:
+    params = {"fields": "user_id,username", "access_token": access_token}
+    async with session.get(f"{GRAPH_INSTAGRAM_BASE}/me", params=params) as resp:
+        payload = await resp.json(content_type=None)
+        if resp.status != 200 or "id" not in payload:
+            logger.error("Не удалось получить профиль Instagram (HTTP %s): %s", resp.status, payload)
+            return None
+        return payload
+
+
+async def oauth_callback_handler(request: web.Request) -> web.Response:
+    error = request.query.get("error_description") or request.query.get("error")
+    if error:
+        logger.warning("Instagram OAuth отклонён пользователем: %s", error)
+        return web.Response(
+            text="Подключение отменено. Вернитесь в Telegram и запросите новую ссылку через /connect_instagram.",
+            status=200,
+        )
+
+    code = request.query.get("code")
+    state = request.query.get("state")
+    if not code or not state:
+        return web.Response(text="Некорректный запрос: отсутствует code или state", status=400)
+
+    tg_chat_id = verify_state(state)
+    if tg_chat_id is None:
+        logger.warning("Instagram OAuth: невалидная подпись state=%s", state)
+        return web.Response(
+            text="Ссылка недействительна или устарела. Запросите новую через /connect_instagram.",
+            status=400,
+        )
+
+    db: Database = request.app["db"]
+    bot: Bot = request.app["bot"]
+    session: aiohttp.ClientSession = request.app["http_session"]
+
+    token_entry = await exchange_code_for_token(session, code)
+    if token_entry is None:
+        await bot.send_message(
+            tg_chat_id,
+            "❌ Не удалось подключить Instagram — сбой при обмене кода на токен. Попробуйте /connect_instagram ещё раз.",
+        )
+        return web.Response(text="Ошибка обмена токена", status=502)
+
+    long_lived_token = await exchange_for_long_lived_token(session, token_entry["access_token"])
+    if long_lived_token is None:
+        await bot.send_message(tg_chat_id, "❌ Не удалось получить долгоживущий токен Instagram.")
+        return web.Response(text="Ошибка long-lived токена", status=502)
+
+    profile = await fetch_ig_profile(session, long_lived_token)
+    if profile is None:
+        await bot.send_message(tg_chat_id, "❌ Не удалось получить данные аккаунта Instagram.")
+        return web.Response(text="Профиль не получен", status=502)
+
+    ig_business_id = profile["id"]
+    username = profile.get("username", ig_business_id)
+
+    await db.upsert_client(
+        name=f"@{username}",
+        ig_business_id=ig_business_id,
+        page_access_token=long_lived_token,
+        manager_chat_id=tg_chat_id,
+    )
+
+    await bot.send_message(
+        tg_chat_id,
+        f"✅ Instagram-аккаунт @{username} подключён к LeadArmor!\n\n"
+        f"Триал на {settings.TRIAL_DAYS} дня уже активен. Как только под вашей рекламой "
+        f"или постом появится комментарий с ключевым словом — пришлю уведомление сюда.",
+    )
+
+    return web.Response(text=f"Готово! Аккаунт @{username} подключён. Вернитесь в Telegram.", status=200)
