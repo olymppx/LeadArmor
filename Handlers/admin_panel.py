@@ -203,6 +203,7 @@ async def add_client_handler(message: Message, command: CommandObject, db: Datab
         page_access_token=page_access_token,
         manager_chat_id=int(manager_chat_id_raw),
     )
+
     masked_token = (
         f"{page_access_token[:10]}…{page_access_token[-4:]}"
         if len(page_access_token) > 14

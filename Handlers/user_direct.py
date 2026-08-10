@@ -77,6 +77,8 @@ async def process_direct_message(
         ig_username=updated_lead["ig_username"],
         phone_number=phone_number,
         source=updated_lead["post_type"],
+        is_hidden=updated_lead["is_comment_removed"],
+        status=updated_lead["status"],
     )
 
     await notify_manager_about_phone_received(

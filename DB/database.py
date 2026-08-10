@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS clients (
 
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS trial_starts_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ;
+ALTER TABLE clients DROP COLUMN IF EXISTS google_sheet_id;
 
 CREATE TABLE IF NOT EXISTS leads (
     id                  BIGSERIAL PRIMARY KEY,
@@ -312,7 +313,8 @@ class Database:
                   AND leads.ig_user_id = $2
                   AND leads.status IN ('notified', 'phone_requested')
                 RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
-                          clients.manager_chat_id, clients.name AS client_name;
+                          leads.is_comment_removed, leads.status, clients.manager_chat_id,
+                          clients.name AS client_name;
                 """,
                 ig_business_id,
                 ig_user_id,

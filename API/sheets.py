@@ -12,11 +12,15 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-HEADER_ROW = ["Дата", "Instagram", "Телефон", "Источник"]
+HEADER_ROW = ["Дата", "Instagram", "Телефон", "Источник", "Комментарий скрыт", "Статус лида"]
 
-SOURCE_LABELS = {
-    "ad": "Таргет (реклама)",
-    "organic": "Органика",
+SOURCE_LABELS = {"ad": "Таргет (реклама)", "organic": "Органика"}
+STATUS_LABELS = {
+    "new": "Новый",
+    "notified": "Менеджер уведомлён",
+    "phone_requested": "Запрошен телефон",
+    "phone_received": "Телефон получен",
+    "closed": "Закрыт",
 }
 
 _client: gspread.Client | None = None
@@ -49,7 +53,14 @@ def _get_client() -> gspread.Client | None:
     return None
 
 
-def _append_confirmed_lead(client_name: str, ig_username: str | None, phone_number: str, source: str) -> None:
+def _append_confirmed_lead(
+    client_name: str,
+    ig_username: str | None,
+    phone_number: str,
+    source: str,
+    is_hidden: bool,
+    status: str,
+) -> None:
     client = _get_client()
     if client is None:
         return
@@ -70,11 +81,22 @@ def _append_confirmed_lead(client_name: str, ig_username: str | None, phone_numb
             f"@{ig_username}" if ig_username else "",
             phone_number,
             SOURCE_LABELS.get(source, source),
+            "Да" if is_hidden else "Нет",
+            STATUS_LABELS.get(status, status),
         ])
         logger.info("Лид @%s записан в Google Sheets (лист %r)", ig_username, client_name)
     except Exception:
         logger.exception("Не удалось записать лид в Google Sheets (клиент %r)", client_name)
 
 
-async def append_confirmed_lead(client_name: str, ig_username: str | None, phone_number: str, source: str) -> None:
-    await asyncio.to_thread(_append_confirmed_lead, client_name, ig_username, phone_number, source)
+async def append_confirmed_lead(
+    client_name: str,
+    ig_username: str | None,
+    phone_number: str,
+    source: str,
+    is_hidden: bool,
+    status: str,
+) -> None:
+    await asyncio.to_thread(
+        _append_confirmed_lead, client_name, ig_username, phone_number, source, is_hidden, status
+    )
