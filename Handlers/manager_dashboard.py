@@ -4,7 +4,8 @@ import html
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.filters.callback_data import CallbackData
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from DB.database import Database
 
@@ -19,21 +20,21 @@ STATUS_LABELS = {
 }
 
 
-@router.message(Command("mystats"))
-async def my_stats_handler(message: Message, db: Database) -> None:
-    if message.from_user is None:
-        return
+class RefreshStatsCallback(CallbackData, prefix="mystats_refresh"):
+    pass
 
-    client = await db.get_client_by_manager_chat_id(message.from_user.id)
+
+class CloseLeadCallback(CallbackData, prefix="lead_close"):
+    lead_id: int
+
+
+async def _build_mystats_view(db: Database, manager_chat_id: int) -> tuple[str, InlineKeyboardMarkup] | None:
+    client = await db.get_client_by_manager_chat_id(manager_chat_id)
     if client is None:
-        await message.answer(
-            "Эта команда для менеджеров подключённых аккаунтов. "
-            "Если это ошибка — свяжитесь с владельцем бота."
-        )
-        return
+        return None
 
-    stats = await db.get_leads_stats_for_manager(message.from_user.id)
-    recent = await db.get_recent_leads_for_manager(message.from_user.id, limit=5)
+    stats = await db.get_leads_stats_for_manager(manager_chat_id)
+    recent = await db.get_recent_leads_for_manager(manager_chat_id, limit=5)
 
     lines = [
         f"📊 <b>Статистика {html.escape(client['name'])}</b>\n",
@@ -42,6 +43,7 @@ async def my_stats_handler(message: Message, db: Database) -> None:
         f"🎯 Таргет: {stats['ad']}",
     ]
 
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
     if recent:
         lines.append("\n<b>Последние лиды:</b>")
         for lead in recent:
@@ -52,5 +54,70 @@ async def my_stats_handler(message: Message, db: Database) -> None:
             lines.append(
                 f"{source} @{username} — {status_label}, тел: {phone} — {lead['created_at']:%d.%m %H:%M}"
             )
+            if lead["status"] != "closed":
+                keyboard_rows.append([
+                    InlineKeyboardButton(
+                        text=f"✅ Закрыть: @{username}",
+                        callback_data=CloseLeadCallback(lead_id=lead["id"]).pack(),
+                    )
+                ])
 
-    await message.answer("\n".join(lines))
+    keyboard_rows.append([
+        InlineKeyboardButton(text="🔄 Обновить", callback_data=RefreshStatsCallback().pack())
+    ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+
+@router.message(Command("mystats"))
+async def my_stats_handler(message: Message, db: Database) -> None:
+    if message.from_user is None:
+        return
+
+    view = await _build_mystats_view(db, message.from_user.id)
+    if view is None:
+        await message.answer(
+            "Эта команда для менеджеров подключённых аккаунтов. "
+            "Если это ошибка — свяжитесь с владельцем бота."
+        )
+        return
+
+    text, keyboard = view
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(RefreshStatsCallback.filter())
+async def refresh_stats_handler(callback: CallbackQuery, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    view = await _build_mystats_view(db, callback.from_user.id)
+    if view is None:
+        await callback.answer("Доступ утерян", show_alert=True)
+        return
+
+    text, keyboard = view
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer("Обновлено")
+
+
+@router.callback_query(CloseLeadCallback.filter())
+async def close_lead_handler(
+    callback: CallbackQuery,
+    callback_data: CloseLeadCallback,
+    db: Database,
+) -> None:
+    if callback.from_user is None:
+        return
+
+    updated = await db.close_lead(callback_data.lead_id, callback.from_user.id)
+    if updated is None:
+        await callback.answer("Лид не найден или уже не ваш", show_alert=True)
+        return
+
+    await callback.answer(f"Лид @{updated['ig_username'] or '?'} закрыт")
+
+    view = await _build_mystats_view(db, callback.from_user.id)
+    if view is not None:
+        text, keyboard = view
+        await callback.message.edit_text(text, reply_markup=keyboard)

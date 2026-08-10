@@ -280,7 +280,7 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetch(
                 """
-                SELECT leads.ig_username, leads.post_type, leads.phone_number,
+                SELECT leads.id, leads.ig_username, leads.post_type, leads.phone_number,
                        leads.status, leads.created_at
                 FROM leads
                 JOIN clients ON clients.id = leads.client_id
@@ -290,6 +290,23 @@ class Database:
                 """,
                 manager_chat_id,
                 limit,
+            )
+
+    async def close_lead(self, lead_id: int, manager_chat_id: int) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                UPDATE leads
+                SET status = 'closed'::lead_status_enum, updated_at = now()
+                FROM clients
+                WHERE leads.client_id = clients.id
+                  AND leads.id = $1
+                  AND clients.manager_chat_id = $2
+                RETURNING leads.id, leads.ig_username
+                """,
+                lead_id,
+                manager_chat_id,
             )
 
     async def save_lead_phone(
