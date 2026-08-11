@@ -62,6 +62,14 @@ async def _build_mystats_view(db: Database, manager_chat_id: int) -> tuple[str, 
                     )
                 ])
 
+    if client["google_sheet_id"]:
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                text="📊 Мои лиды (таблица)",
+                url=f"https://docs.google.com/spreadsheets/d/{client['google_sheet_id']}/edit",
+            )
+        ])
+
     keyboard_rows.append([
         InlineKeyboardButton(text="🔄 Обновить", callback_data=RefreshStatsCallback().pack())
     ])
