@@ -24,10 +24,6 @@ class RefreshStatsCallback(CallbackData, prefix="mystats_refresh"):
     pass
 
 
-class CloseLeadCallback(CallbackData, prefix="lead_close"):
-    lead_id: int
-
-
 async def _build_mystats_view(db: Database, manager_chat_id: int) -> tuple[str, InlineKeyboardMarkup] | None:
     client = await db.get_client_by_manager_chat_id(manager_chat_id)
     if client is None:
@@ -43,7 +39,6 @@ async def _build_mystats_view(db: Database, manager_chat_id: int) -> tuple[str, 
         f"🎯 Таргет: {stats['ad']}",
     ]
 
-    keyboard_rows: list[list[InlineKeyboardButton]] = []
     if recent:
         lines.append("\n<b>Последние лиды:</b>")
         for lead in recent:
@@ -54,18 +49,12 @@ async def _build_mystats_view(db: Database, manager_chat_id: int) -> tuple[str, 
             lines.append(
                 f"{source} @{username} — {status_label}, тел: {phone} — {lead['created_at']:%d.%m %H:%M}"
             )
-            if lead["status"] != "closed":
-                keyboard_rows.append([
-                    InlineKeyboardButton(
-                        text=f"✅ Закрыть: @{username}",
-                        callback_data=CloseLeadCallback(lead_id=lead["id"]).pack(),
-                    )
-                ])
 
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
     if client["google_sheet_id"]:
         keyboard_rows.append([
             InlineKeyboardButton(
-                text="📊 Мои лиды (таблица)",
+                text="📊 Готовые к покупке (таблица)",
                 url=f"https://docs.google.com/spreadsheets/d/{client['google_sheet_id']}/edit",
             )
         ])
@@ -107,25 +96,3 @@ async def refresh_stats_handler(callback: CallbackQuery, db: Database) -> None:
     text, keyboard = view
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer("Обновлено")
-
-
-@router.callback_query(CloseLeadCallback.filter())
-async def close_lead_handler(
-    callback: CallbackQuery,
-    callback_data: CloseLeadCallback,
-    db: Database,
-) -> None:
-    if callback.from_user is None:
-        return
-
-    updated = await db.close_lead(callback_data.lead_id, callback.from_user.id)
-    if updated is None:
-        await callback.answer("Лид не найден или уже не ваш", show_alert=True)
-        return
-
-    await callback.answer(f"Лид @{updated['ig_username'] or '?'} закрыт")
-
-    view = await _build_mystats_view(db, callback.from_user.id)
-    if view is not None:
-        text, keyboard = view
-        await callback.message.edit_text(text, reply_markup=keyboard)

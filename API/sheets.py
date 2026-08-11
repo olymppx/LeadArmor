@@ -152,30 +152,23 @@ def _open_worksheet(client: gspread.Client, sheet_id: str | None, client_name: s
         return worksheet
 
 
-def _parse_row_number(updated_range: str) -> int | None:
-    if "!" not in updated_range:
-        return None
-    cell_ref = updated_range.split("!")[1].split(":")[0]
-    digits = "".join(ch for ch in cell_ref if ch.isdigit())
-    return int(digits) if digits else None
-
-
-def _append_new_lead_row(
+def _append_confirmed_lead(
     sheet_id: str | None,
     client_name: str,
     ig_username: str | None,
+    phone_number: str,
     post_type: str,
     is_hidden: bool,
     status: str,
-) -> int | None:
+) -> None:
     client = _get_service_client()
     if client is None:
-        return None
+        return
 
     row = [
         datetime.now().strftime("%d.%m.%Y %H:%M"),
         f"@{ig_username}" if ig_username else "",
-        "",
+        phone_number,
         SOURCE_LABELS.get(post_type, post_type),
         "Да" if is_hidden else "Нет",
         STATUS_LABELS.get(status, status),
@@ -184,80 +177,23 @@ def _append_new_lead_row(
     try:
         worksheet = _open_worksheet(client, sheet_id, client_name)
         if worksheet is None:
-            return None
+            return
 
-        response = worksheet.append_row(row, value_input_option="RAW")
-        row_number = _parse_row_number(response.get("updates", {}).get("updatedRange", ""))
-        logger.info(
-            "Строка лида @%s создана в Google Sheets (%s), строка %s",
-            ig_username, sheet_id or client_name, row_number,
-        )
-        return row_number
+        worksheet.append_row(row, value_input_option="RAW")
+        logger.info("Готовый лид @%s записан в Google Sheets (%s)", ig_username, sheet_id or client_name)
     except Exception:
-        logger.exception("Не удалось создать строку лида в Google Sheets (клиент %r)", client_name)
-        return None
+        logger.exception("Не удалось записать готовый лид в Google Sheets (клиент %r)", client_name)
 
 
-async def append_new_lead_row(
+async def append_confirmed_lead(
     sheet_id: str | None,
     client_name: str,
     ig_username: str | None,
+    phone_number: str,
     post_type: str,
     is_hidden: bool,
     status: str,
-) -> int | None:
-    return await asyncio.to_thread(
-        _append_new_lead_row, sheet_id, client_name, ig_username, post_type, is_hidden, status
-    )
-
-
-def _update_lead_row(
-    sheet_id: str | None,
-    client_name: str,
-    row_number: int,
-    phone_number: str,
-    source: str,
-    is_hidden: bool,
-    status: str,
 ) -> None:
-    client = _get_service_client()
-    if client is None:
-        return
-
-    try:
-        worksheet = _open_worksheet(client, sheet_id, client_name)
-        if worksheet is None:
-            return
-
-        worksheet.update(
-            values=[[
-                phone_number,
-                SOURCE_LABELS.get(source, source),
-                "Да" if is_hidden else "Нет",
-                STATUS_LABELS.get(status, status),
-            ]],
-            range_name=f"C{row_number}:F{row_number}",
-        )
-        logger.info(
-            "Строка лида обновлена в Google Sheets (%s), строка %s", sheet_id or client_name, row_number
-        )
-    except Exception:
-        logger.exception(
-            "Не удалось обновить строку лида в Google Sheets (клиент %r, строка %s)", client_name, row_number
-        )
-
-
-async def update_lead_row(
-    sheet_id: str | None,
-    client_name: str,
-    row_number: int | None,
-    phone_number: str,
-    source: str,
-    is_hidden: bool,
-    status: str,
-) -> None:
-    if not row_number:
-        return
     await asyncio.to_thread(
-        _update_lead_row, sheet_id, client_name, row_number, phone_number, source, is_hidden, status
+        _append_confirmed_lead, sheet_id, client_name, ig_username, phone_number, post_type, is_hidden, status
     )

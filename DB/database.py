@@ -59,12 +59,11 @@ CREATE TABLE IF NOT EXISTS leads (
     status              lead_status_enum NOT NULL DEFAULT 'new',
     phone_number        VARCHAR(32),
     is_comment_removed  BOOLEAN NOT NULL DEFAULT FALSE,  -- актуально только для post_type = 'ad'
-    sheet_row           INTEGER,                          -- номер строки в Google Sheets этого лида
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE leads ADD COLUMN IF NOT EXISTS sheet_row INTEGER;
+ALTER TABLE leads DROP COLUMN IF EXISTS sheet_row;
 
 CREATE INDEX IF NOT EXISTS idx_leads_ig_user_id ON leads(ig_user_id);
 """
@@ -237,16 +236,6 @@ class Database:
                 lead_id,
             )
 
-    async def get_lead_by_id(self, lead_id: int) -> asyncpg.Record | None:
-        assert self.pool is not None
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(
-                """
-                SELECT * FROM leads WHERE id = $1
-                """,
-                lead_id,
-            )
-
     async def update_lead_status(self, lead_id: int, status: str) -> None:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
@@ -256,15 +245,6 @@ class Database:
                 """,
                 lead_id,
                 status,
-            )
-
-    async def set_lead_sheet_row(self, lead_id: int, sheet_row: int) -> None:
-        assert self.pool is not None
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE leads SET sheet_row = $2 WHERE id = $1",
-                lead_id,
-                sheet_row,
             )
 
     async def get_leads_stats(self) -> dict[str, int]:
@@ -315,23 +295,6 @@ class Database:
                 limit,
             )
 
-    async def close_lead(self, lead_id: int, manager_chat_id: int) -> asyncpg.Record | None:
-        assert self.pool is not None
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(
-                """
-                UPDATE leads
-                SET status = 'closed'::lead_status_enum, updated_at = now()
-                FROM clients
-                WHERE leads.client_id = clients.id
-                  AND leads.id = $1
-                  AND clients.manager_chat_id = $2
-                RETURNING leads.id, leads.ig_username
-                """,
-                lead_id,
-                manager_chat_id,
-            )
-
     async def save_lead_phone(
         self,
         *,
@@ -353,7 +316,7 @@ class Database:
                   AND leads.ig_user_id = $2
                   AND leads.status IN ('new', 'notified', 'phone_requested')
                 RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
-                          leads.is_comment_removed, leads.status, leads.sheet_row,
+                          leads.is_comment_removed, leads.status,
                           clients.manager_chat_id, clients.name AS client_name,
                           clients.google_sheet_id, clients.page_access_token;
                 """,
