@@ -355,7 +355,7 @@ class Database:
                 RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
                           leads.is_comment_removed, leads.status, leads.sheet_row,
                           clients.manager_chat_id, clients.name AS client_name,
-                          clients.google_sheet_id;
+                          clients.google_sheet_id, clients.page_access_token;
                 """,
                 ig_business_id,
                 ig_user_id,

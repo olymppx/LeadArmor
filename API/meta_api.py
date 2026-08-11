@@ -76,6 +76,14 @@ def build_private_reply_text(username: str | None) -> str:
         "va biz sizga bog'lanamiz \U0001F680\U0001F6E1"
     )
 
+QUICK_REPLY_PAYLOAD = "SEND_PHONE_NUMBER"
+QUICK_REPLY_TITLE = "\U0001F4DE Telefon raqamni yuborish"
+
+THANK_YOU_TEXT = (
+    "Rahmat! Sizning so'rovingiz qabul qilindi va menedjerimiz "
+    "siz bilan tez orada bog'lanadi!\U0001F680\U0001F6E1"
+)
+
 # Требует в Meta App Dashboard одобренных прав instagram_business_basic,
 # instagram_business_manage_comments, instagram_business_manage_messages
 # и подписки вебхука на поля messages и messaging_postbacks.
@@ -90,7 +98,16 @@ async def send_private_reply(
     params = {"access_token": access_token}
     payload = {
         "recipient": {"comment_id": comment_id},
-        "message": {"text": build_private_reply_text(username)},
+        "message": {
+            "text": build_private_reply_text(username),
+            "quick_replies": [
+                {
+                    "content_type": "text",
+                    "title": QUICK_REPLY_TITLE,
+                    "payload": QUICK_REPLY_PAYLOAD,
+                }
+            ],
+        },
     }
     async with session.post(url, params=params, json=payload) as resp:
         data = await resp.json()
@@ -103,5 +120,29 @@ async def send_private_reply(
             "instagram_business_manage_comments, instagram_business_manage_messages "
             "и подписку вебхука на поля messages/messaging_postbacks.",
             comment_id, resp.status, data,
+        )
+        return False
+
+
+async def send_thank_you_message(
+    session: aiohttp.ClientSession,
+    ig_business_id: str,
+    ig_user_id: str,
+    access_token: str,
+) -> bool:
+    url = f"{GRAPH_API_BASE}/{ig_business_id}/messages"
+    params = {"access_token": access_token}
+    payload = {
+        "recipient": {"id": ig_user_id},
+        "message": {"text": THANK_YOU_TEXT},
+    }
+    async with session.post(url, params=params, json=payload) as resp:
+        data = await resp.json()
+        if resp.status == 200:
+            logger.info("Спасибо-сообщение отправлено ig_user_id=%s: %s", ig_user_id, data)
+            return True
+        logger.error(
+            "Не удалось отправить спасибо-сообщение ig_user_id=%s (HTTP %s): %s",
+            ig_user_id, resp.status, data,
         )
         return False

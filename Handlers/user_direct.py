@@ -3,39 +3,45 @@ from __future__ import annotations
 import logging
 import re
 
+import aiohttp
 from aiogram import Bot
 
+from API.meta_api import send_thank_you_message
 from API.sheets import update_lead_row
 from DB.database import Database
 from Handlers.manager_alerts import notify_manager_about_phone_received
 
 logger = logging.getLogger(__name__)
 
-PHONE_CANDIDATE_PATTERN = re.compile(r"[\+]?\d[\d\s\-()]{7,16}\d")
+# Разделители, которые реально встречаются у живых людей: пробел, дефис,
+# точка, скобки, длинное/среднее тире (мобильные клавиатуры их подставляют
+# при автозамене дефиса).
+PHONE_CANDIDATE_PATTERN = re.compile(r"\+?\d[\d\s\-.()–—]{6,18}\d")
 
 
 def normalize_uzbek_phone(text: str) -> str | None:
-    match = PHONE_CANDIDATE_PATTERN.search(text)
-    if not match:
-        return None
+    for match in PHONE_CANDIDATE_PATTERN.finditer(text):
+        digits = re.sub(r"\D", "", match.group(0))
 
-    digits = re.sub(r"\D", "", match.group(0))
+        if digits.startswith("998") and len(digits) == 12:
+            subscriber_number = digits[3:]
+        elif digits.startswith("8") and len(digits) == 10:
+            # Локальная привычка набора "8-90-123-45-67" вместо "+998"
+            subscriber_number = digits[1:]
+        elif len(digits) == 9:
+            subscriber_number = digits
+        else:
+            continue
 
-    if digits.startswith("998") and len(digits) == 12:
-        subscriber_number = digits[3:]
-    elif len(digits) == 9:
-        subscriber_number = digits
-    else:
-        return None
+        if re.fullmatch(r"\d{9}", subscriber_number):
+            return f"+998{subscriber_number}"
 
-    if not re.fullmatch(r"\d{9}", subscriber_number):
-        return None
-
-    return f"+998{subscriber_number}"
+    return None
 
 
 async def process_direct_message(
     db: Database,
+    session: aiohttp.ClientSession,
     bot: Bot,
     ig_business_id: str | None,
     value: dict,
@@ -45,10 +51,20 @@ async def process_direct_message(
     message = value.get("message", {})
     text: str = message.get("text", "")
 
-    if not ig_business_id or not ig_user_id or not text:
+    if not ig_business_id or not ig_user_id:
         return
 
     if message.get("is_echo"):
+        return
+
+    if message.get("quick_reply"):
+        # Клиент нажал кнопку "Telefon raqamni yuborish" — это не сам номер,
+        # а подтверждение намерения его отправить. Реальный номер придёт
+        # следующим сообщением и поймается обычным regex-сканированием ниже.
+        logger.info("Quick reply от ig_user_id=%s: %s", ig_user_id, message["quick_reply"].get("payload"))
+        return
+
+    if not text:
         return
 
     phone_number = normalize_uzbek_phone(text)
@@ -80,6 +96,13 @@ async def process_direct_message(
         source=updated_lead["post_type"],
         is_hidden=updated_lead["is_comment_removed"],
         status=updated_lead["status"],
+    )
+
+    await send_thank_you_message(
+        session=session,
+        ig_business_id=ig_business_id,
+        ig_user_id=ig_user_id,
+        access_token=updated_lead["page_access_token"],
     )
 
     await notify_manager_about_phone_received(

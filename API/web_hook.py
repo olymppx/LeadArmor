@@ -82,7 +82,7 @@ async def events_handler(request: web.Request) -> web.Response:
 
         for messaging_event in messaging:
             try:
-                await process_direct_message(db, bot, ig_business_id, messaging_event)
+                await process_direct_message(db, session, bot, ig_business_id, messaging_event)
             except Exception:
                 logger.exception("Ошибка обработки сообщения Директа: %s", messaging_event)
 
