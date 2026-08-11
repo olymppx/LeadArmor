@@ -79,6 +79,7 @@ async def process_direct_message(
         source=updated_lead["post_type"],
         is_hidden=updated_lead["is_comment_removed"],
         status=updated_lead["status"],
+        sheet_id=updated_lead["google_sheet_id"],
     )
 
     await notify_manager_about_phone_received(

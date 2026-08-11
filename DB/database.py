@@ -39,11 +39,13 @@ CREATE TABLE IF NOT EXISTS clients (
     is_active                 BOOLEAN NOT NULL DEFAULT TRUE,
     trial_starts_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     subscription_expires_at   TIMESTAMPTZ,
+    google_sheet_id           VARCHAR(128),
     created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS trial_starts_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS google_sheet_id VARCHAR(128);
 ALTER TABLE clients DROP COLUMN IF EXISTS google_sheet_id;
 
 CREATE TABLE IF NOT EXISTS leads (
@@ -193,10 +195,20 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetch(
                 """
-                SELECT name, ig_business_id, is_active, trial_starts_at, subscription_expires_at
+                SELECT name, ig_business_id, is_active, trial_starts_at,
+                       subscription_expires_at, google_sheet_id
                 FROM clients
                 ORDER BY created_at DESC
                 """
+            )
+
+    async def set_client_sheet_id(self, ig_business_id: str, google_sheet_id: str) -> None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE clients SET google_sheet_id = $2 WHERE ig_business_id = $1",
+                ig_business_id,
+                google_sheet_id,
             )
 
     async def extend_subscription(self, ig_business_id: str, days: int) -> asyncpg.Record | None:
@@ -331,7 +343,7 @@ class Database:
                   AND leads.status IN ('notified', 'phone_requested')
                 RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
                           leads.is_comment_removed, leads.status, clients.manager_chat_id,
-                          clients.name AS client_name;
+                          clients.name AS client_name, clients.google_sheet_id;
                 """,
                 ig_business_id,
                 ig_user_id,

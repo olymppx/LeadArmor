@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     GOOGLE_SHEETS_CREDENTIALS_FILE: str = "credentials.json"
     GOOGLE_SHEETS_SPREADSHEET_ID: str = ""
 
+    # OAuth от личного Google-аккаунта владельца — нужен, чтобы создавать
+    # отдельный файл на каждого клиента (у service account своей квоты Drive нет).
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    GOOGLE_OAUTH_REDIRECT_URI: str = ""
+    GOOGLE_OAUTH_REFRESH_TOKEN: str = ""
+
     LEAD_KEYWORDS: list[str] = [
         "купить", "цена", "сколько стоит", "+",
         "narxi", "нархи", "qancha", "қанча",

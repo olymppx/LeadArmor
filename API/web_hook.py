@@ -8,6 +8,7 @@ from aiogram import Bot
 from aiohttp import web
 
 from API import meta_api
+from API.google_oauth import google_oauth_callback_handler
 from API.instagram_oauth import oauth_callback_handler
 from API.legal import privacy_policy_handler
 from DB.database import Database
@@ -170,6 +171,7 @@ def create_app(db: Database, bot : Bot) -> web.Application:
     app.router.add_get(WEBHOOK_PATH, verify_handler)
     app.router.add_post(WEBHOOK_PATH, events_handler)
     app.router.add_get("/oauth/instagram/callback", oauth_callback_handler)
+    app.router.add_get("/oauth/google/callback", google_oauth_callback_handler)
     app.router.add_get("/legal/privacy", privacy_policy_handler)
 
     async def _cleanup(app: web.Application) -> None:

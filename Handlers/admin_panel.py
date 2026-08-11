@@ -9,6 +9,8 @@ from aiogram.filters import Command, CommandObject
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from API.google_oauth import build_google_authorize_url
+from API.sheets import create_client_spreadsheet
 from DB.database import Database
 from config import settings
 
@@ -47,6 +49,28 @@ def _compute_status_line(client, now: datetime) -> str:
         hours_left = int((trial_ends_at - now).total_seconds() // 3600)
         return f"🕒 Триал активен, осталось {hours_left} ч. (до {trial_ends_at:%d.%m.%Y %H:%M} UTC)"
     return "⛔ Триал и подписка истекли — перехват лидов отключён"
+
+
+@router.message(Command("connect_google_sheets"))
+async def connect_google_sheets_handler(message: Message) -> None:
+    if not _is_owner(message):
+        return
+
+    if not settings.GOOGLE_OAUTH_CLIENT_ID or not settings.GOOGLE_OAUTH_REDIRECT_URI:
+        await message.answer(
+            "Не настроены GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_REDIRECT_URI на сервере."
+        )
+        return
+
+    url = build_google_authorize_url()
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔗 Войти в Google", url=url)]]
+    )
+    await message.answer(
+        "Нажми, войди своим личным Google-аккаунтом и разреши доступ. "
+        "После этого я пришлю сюда refresh token — перешли его мне в чат.",
+        reply_markup=keyboard,
+    )
 
 
 @router.message(Command("stats"))
@@ -104,12 +128,20 @@ async def _build_clients_view(db: Database) -> tuple[str, InlineKeyboardMarkup |
             f"(<code>{client['ig_business_id']}</code>) — {_compute_status_line(client, now)}"
         )
         toggle_text = "🔴 Деактивировать" if client["is_active"] else "🟢 Активировать"
-        keyboard_rows.append([
+        row = [
             InlineKeyboardButton(
                 text=f"{toggle_text}: {client['name']}",
                 callback_data=ClientToggleCallback(ig_business_id=client["ig_business_id"]).pack(),
             )
-        ])
+        ]
+        if client["google_sheet_id"]:
+            row.append(
+                InlineKeyboardButton(
+                    text="📊 Своя таблица",
+                    url=f"https://docs.google.com/spreadsheets/d/{client['google_sheet_id']}/edit",
+                )
+            )
+        keyboard_rows.append(row)
 
     if settings.GOOGLE_SHEETS_SPREADSHEET_ID:
         keyboard_rows.append([
@@ -204,6 +236,12 @@ async def add_client_handler(message: Message, command: CommandObject, db: Datab
         manager_chat_id=int(manager_chat_id_raw),
     )
 
+    sheet_id = await create_client_spreadsheet(name)
+    sheet_line = "📊 Отдельная таблица не создана (общая Sheets всё равно работает)"
+    if sheet_id:
+        await db.set_client_sheet_id(ig_business_id, sheet_id)
+        sheet_line = f"📊 Личная таблица: https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+
     masked_token = (
         f"{page_access_token[:10]}…{page_access_token[-4:]}"
         if len(page_access_token) > 14
@@ -214,7 +252,8 @@ async def add_client_handler(message: Message, command: CommandObject, db: Datab
         f"Название: {html.escape(name)}\n"
         f"ig_business_id: <code>{ig_business_id}</code>\n"
         f"Токен: <code>{masked_token}</code>\n"
-        f"Уведомления менеджеру: чат <code>{manager_chat_id_raw}</code>\n\n"
+        f"Уведомления менеджеру: чат <code>{manager_chat_id_raw}</code>\n"
+        f"{sheet_line}\n\n"
         f"Триал на {settings.TRIAL_DAYS} дня стартовал автоматически."
     )
 

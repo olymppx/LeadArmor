@@ -9,6 +9,7 @@ import aiohttp
 from aiogram import Bot
 from aiohttp import web
 
+from API.sheets import create_client_spreadsheet
 from DB.database import Database
 from config import settings
 
@@ -161,6 +162,10 @@ async def oauth_callback_handler(request: web.Request) -> web.Response:
         page_access_token=long_lived_token,
         manager_chat_id=tg_chat_id,
     )
+
+    sheet_id = await create_client_spreadsheet(f"@{username}")
+    if sheet_id:
+        await db.set_client_sheet_id(ig_business_id, sheet_id)
 
     await bot.send_message(
         tg_chat_id,
