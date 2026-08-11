@@ -121,6 +121,8 @@ def _create_client_spreadsheet(client_name: str) -> str | None:
         if service_account_email:
             spreadsheet.share(service_account_email, perm_type="user", role="writer", notify=False)
 
+        spreadsheet.share(None, perm_type="anyone", role="reader", with_link=True)
+
         logger.info("Создана отдельная Google-таблица для %r: %s", client_name, spreadsheet.id)
         return spreadsheet.id
     except Exception:
