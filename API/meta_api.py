@@ -68,10 +68,13 @@ async def hide_comment(session: aiohttp.ClientSession, comment_id: str, access_t
         logger.error("Не удалось скрыть комментарий %s (HTTP %s): %s", comment_id, resp.status, data)
         return False
 
-PRIVATE_REPLY_TEXT = (
-    "Agar siz shu maxsulotni sotib olmoqchi bo'lsangiz nomer "
-    "telefoningizni qoldiring va biz sizga bog'lanamiz!"
-)
+def build_private_reply_text(username: str | None) -> str:
+    name_part = f"@{username}" if username else "mijoz"
+    return (
+        f"Salam, {name_part}!\n"
+        "Agar maxsulotimizni sotib olmoqchi bo'lsangiz nomeringizni qoldiring "
+        "va biz sizga bog'lanamiz \U0001F680\U0001F6E1"
+    )
 
 # Требует в Meta App Dashboard одобренных прав instagram_business_basic,
 # instagram_business_manage_comments, instagram_business_manage_messages
@@ -81,12 +84,13 @@ async def send_private_reply(
     ig_business_id: str,
     comment_id: str,
     access_token: str,
+    username: str | None = None,
 ) -> bool:
     url = f"{GRAPH_API_BASE}/{ig_business_id}/messages"
     params = {"access_token": access_token}
     payload = {
         "recipient": {"comment_id": comment_id},
-        "message": {"text": PRIVATE_REPLY_TEXT},
+        "message": {"text": build_private_reply_text(username)},
     }
     async with session.post(url, params=params, json=payload) as resp:
         data = await resp.json()

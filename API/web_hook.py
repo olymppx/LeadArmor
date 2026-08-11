@@ -11,6 +11,7 @@ from API import meta_api
 from API.google_oauth import google_oauth_callback_handler
 from API.instagram_oauth import oauth_callback_handler
 from API.legal import privacy_policy_handler
+from API.sheets import append_new_lead_row
 from DB.database import Database
 from Handlers.manager_alerts import notify_manager_about_ad_lead
 from Handlers.user_direct import process_direct_message
@@ -141,18 +142,23 @@ async def proccess_comment(db: database.Database,
     )
     logger.info("Новый лид #%s (%s) от @%s: %r", lead_id, post_type, ig_username, comment_text)
 
-    if post_type != "ad":
-        return
+    # Комментарий скрываем ТОЛЬКО у рекламы — органику трогать нельзя,
+    # она держит вовлечённость поста, скрывать её незачем и вредно.
+    is_hidden = False
+    if post_type == "ad":
+        is_hidden = await meta_api.hide_comment(session, comment_id, client["page_access_token"])
+        if is_hidden:
+            await db.mark_comment_removed(lead_id)
 
-    hidden = await meta_api.hide_comment(session, comment_id, client["page_access_token"])
-    if hidden:
-        await db.mark_comment_removed(lead_id)
-
+    # А вот private reply с запросом телефона и уведомление менеджеру —
+    # теперь для ЛЮБОГО лида, независимо от post_type.
     reply_sent = await meta_api.send_private_reply(
-        session, ig_business_id, comment_id, client["page_access_token"]
+        session, ig_business_id, comment_id, client["page_access_token"], username=ig_username,
     )
+    status = "new"
     if reply_sent:
         await db.update_lead_status(lead_id, "phone_requested")
+        status = "phone_requested"
 
     await notify_manager_about_ad_lead(
         bot=bot,
@@ -160,7 +166,19 @@ async def proccess_comment(db: database.Database,
         username=ig_username,
         comment_text=comment_text,
         lead_id=lead_id,
+        post_type=post_type,
     )
+
+    sheet_row = await append_new_lead_row(
+        sheet_id=client["google_sheet_id"],
+        client_name=client["name"],
+        ig_username=ig_username,
+        post_type=post_type,
+        is_hidden=is_hidden,
+        status=status,
+    )
+    if sheet_row:
+        await db.set_lead_sheet_row(lead_id, sheet_row)
 
 def create_app(db: Database, bot : Bot) -> web.Application:
     app = web.Application()

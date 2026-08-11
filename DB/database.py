@@ -59,9 +59,12 @@ CREATE TABLE IF NOT EXISTS leads (
     status              lead_status_enum NOT NULL DEFAULT 'new',
     phone_number        VARCHAR(32),
     is_comment_removed  BOOLEAN NOT NULL DEFAULT FALSE,  -- актуально только для post_type = 'ad'
+    sheet_row           INTEGER,                          -- номер строки в Google Sheets этого лида
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS sheet_row INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_leads_ig_user_id ON leads(ig_user_id);
 """
@@ -255,6 +258,15 @@ class Database:
                 status,
             )
 
+    async def set_lead_sheet_row(self, lead_id: int, sheet_row: int) -> None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE leads SET sheet_row = $2 WHERE id = $1",
+                lead_id,
+                sheet_row,
+            )
+
     async def get_leads_stats(self) -> dict[str, int]:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
@@ -339,10 +351,11 @@ class Database:
                 WHERE leads.client_id = clients.id
                   AND clients.ig_business_id = $1
                   AND leads.ig_user_id = $2
-                  AND leads.status IN ('notified', 'phone_requested')
+                  AND leads.status IN ('new', 'notified', 'phone_requested')
                 RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
-                          leads.is_comment_removed, leads.status, clients.manager_chat_id,
-                          clients.name AS client_name, clients.google_sheet_id;
+                          leads.is_comment_removed, leads.status, leads.sheet_row,
+                          clients.manager_chat_id, clients.name AS client_name,
+                          clients.google_sheet_id;
                 """,
                 ig_business_id,
                 ig_user_id,

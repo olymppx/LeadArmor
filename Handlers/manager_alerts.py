@@ -39,28 +39,44 @@ def _build_lead_keyboard(lead_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def _build_lead_alert_text(username: str | None, comment_text: str, post_type: str, status_line: str = "") -> str:
+    safe_username = html.escape(username) if username else "без username"
+    safe_comment = html.escape(comment_text)
+    if post_type == "ad":
+        header = "🚨 <b>ПЕРЕХВАТ ТАРГЕТ-ЛИДА!</b>"
+        source_line = "оставил комментарий под рекламой"
+        action_line = (
+            "Скрипт мгновенно скрыл коммент от конкурентов и отправил "
+            "private reply в Директ с запросом телефона!"
+        )
+    else:
+        header = "🌿 <b>НОВЫЙ ЛИД (органика)!</b>"
+        source_line = "оставил комментарий"
+        action_line = (
+            "Комментарий остался виден (это не реклама, скрывать не нужно), "
+            "но private reply с запросом телефона уже отправлен в Директ!"
+        )
+    text = f"{header}\n\nПользователь @{safe_username} {source_line}:\n«{safe_comment}»\n\n{action_line}"
+    if status_line:
+        text += f"\n\n{status_line}"
+    return text
+
+
 async def notify_manager_about_ad_lead(
     bot: Bot,
     manager_chat_id: int,
     username: str | None,
     comment_text: str,
     lead_id: int,
+    post_type: str = "ad",
 ) -> None:
-    safe_username = html.escape(username) if username else "без username"
-    safe_comment = html.escape(comment_text)
-    text = (
-        "🚨 <b>ПЕРЕХВАТ ТАРГЕТ-ЛИДА!</b>\n\n"
-        f"Пользователь @{safe_username} оставил комментарий под рекламой:\n"
-        f"«{safe_comment}»\n\n"
-        "Скрипт мгновенно скрыл коммент от конкурентов и отправил "
-        "private reply в Директ с запросом телефона!"
-    )
+    text = _build_lead_alert_text(username, comment_text, post_type)
     await bot.send_message(
         chat_id=manager_chat_id,
         text=text,
         reply_markup=_build_lead_keyboard(lead_id),
     )
-    logger.info("Менеджер %s уведомлён о лиде #%s", manager_chat_id, lead_id)
+    logger.info("Менеджер %s уведомлён о лиде #%s (%s)", manager_chat_id, lead_id, post_type)
 
 
 async def notify_manager_about_phone_received(
@@ -92,17 +108,9 @@ async def check_lead_status_handler(
 
     status_label = STATUS_LABELS.get(lead["status"], lead["status"])
     phone_label = lead["phone_number"] or "Ещё не оставил"
-    safe_username = html.escape(lead["ig_username"]) if lead["ig_username"] else "без username"
-    safe_comment = html.escape(lead["comment_text"])
+    status_line = f"Статус: {status_label} | Телефон: {phone_label}"
 
-    text = (
-        "🚨 <b>ПЕРЕХВАТ ТАРГЕТ-ЛИДА!</b>\n\n"
-        f"Пользователь @{safe_username} оставил комментарий под рекламой:\n"
-        f"«{safe_comment}»\n\n"
-        "Скрипт мгновенно скрыл коммент от конкурентов и отправил "
-        "private reply в Директ с запросом телефона!\n\n"
-        f"Статус: {status_label} | Телефон: {phone_label}"
-    )
+    text = _build_lead_alert_text(lead["ig_username"], lead["comment_text"], lead["post_type"], status_line)
 
     await callback.message.edit_text(text, reply_markup=_build_lead_keyboard(lead["id"]))
-    await callback.answer("Обновлено" )
+    await callback.answer("Обновлено")

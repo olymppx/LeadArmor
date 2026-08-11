@@ -5,7 +5,7 @@ import re
 
 from aiogram import Bot
 
-from API.sheets import append_confirmed_lead
+from API.sheets import update_lead_row
 from DB.database import Database
 from Handlers.manager_alerts import notify_manager_about_phone_received
 
@@ -72,14 +72,14 @@ async def process_direct_message(
         updated_lead["id"], updated_lead["ig_username"], phone_number,
     )
 
-    await append_confirmed_lead(
+    await update_lead_row(
+        sheet_id=updated_lead["google_sheet_id"],
         client_name=updated_lead["client_name"],
-        ig_username=updated_lead["ig_username"],
+        row_number=updated_lead["sheet_row"],
         phone_number=phone_number,
         source=updated_lead["post_type"],
         is_hidden=updated_lead["is_comment_removed"],
         status=updated_lead["status"],
-        sheet_id=updated_lead["google_sheet_id"],
     )
 
     await notify_manager_about_phone_received(
