@@ -18,6 +18,7 @@ from manager_views import (
     AddMediaCallback,
     EditDirectTextCallback,
     EditThankYouTextCallback,
+    ListMediaCallback,
     RefreshStatsCallback,
     build_manager_home_view,
 )
@@ -72,6 +73,10 @@ class ToggleMediaActiveCallback(CallbackData, prefix="toggle_media"):
 
 
 class DeleteMediaCallback(CallbackData, prefix="delete_media"):
+    media_id: str
+
+
+class OpenMediaCallback(CallbackData, prefix="open_media"):
     media_id: str
 
 
@@ -249,6 +254,47 @@ async def receive_thank_you_text_handler(message: Message, state: FSMContext, db
     await message.answer(
         "Muvaffaqiyatli! Янги Thank-you матни лазерным бетоном запечатан в базу данных! 🚀🛡️"
     )
+
+
+@router.callback_query(ListMediaCallback.filter())
+async def list_media_handler(callback: CallbackQuery, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    client = await db.get_client_by_manager_chat_id(callback.from_user.id)
+    if client is None:
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
+        return
+
+    media_list = await db.list_monitored_media(client["ig_business_id"])
+    if not media_list:
+        await callback.message.answer("Пока нет ни одного добавленного поста.")
+        await _safe_answer(callback)
+        return
+
+    keyboard_rows = []
+    for media_row in media_list:
+        status_dot = "🟢" if media_row["is_active"] else "🔴"
+        trigger_label = TRIGGER_LABELS.get(media_row["trigger_type"], media_row["trigger_type"])
+        keyboard_rows.append([InlineKeyboardButton(
+            text=f"{status_dot} {media_row['media_id']} — {trigger_label}",
+            callback_data=OpenMediaCallback(media_id=media_row["media_id"]).pack(),
+        )])
+
+    await callback.message.answer(
+        f"📋 <b>Все подключённые посты ({len(media_list)}):</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+    )
+    await _safe_answer(callback)
+
+
+@router.callback_query(OpenMediaCallback.filter())
+async def open_media_handler(callback: CallbackQuery, callback_data: OpenMediaCallback, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    await _show_media_card(callback.message, db, callback_data.media_id)
+    await _safe_answer(callback)
 
 
 @router.callback_query(AddMediaCallback.filter())

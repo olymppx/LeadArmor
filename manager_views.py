@@ -39,6 +39,10 @@ class AddMediaCallback(CallbackData, prefix="add_media"):
     pass
 
 
+class ListMediaCallback(CallbackData, prefix="list_media"):
+    pass
+
+
 async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[str, InlineKeyboardMarkup] | None:
     client = await db.get_client_by_manager_chat_id(manager_chat_id)
     if client is None:
@@ -82,6 +86,9 @@ async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[s
     keyboard_rows: list[list[InlineKeyboardButton]] = []
     keyboard_rows.append([
         InlineKeyboardButton(text="➕ Добавить пост", callback_data=AddMediaCallback().pack())
+    ])
+    keyboard_rows.append([
+        InlineKeyboardButton(text="📋 Все чат-боты", callback_data=ListMediaCallback().pack())
     ])
     if client["google_sheet_id"]:
         keyboard_rows.append([

@@ -396,6 +396,14 @@ class Database:
             )
         return result == "DELETE 1"
 
+    async def list_monitored_media(self, ig_business_id: str) -> list[asyncpg.Record]:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT * FROM monitored_media WHERE ig_business_id = $1 ORDER BY created_at DESC",
+                ig_business_id,
+            )
+
     async def extend_subscription(self, ig_business_id: str, days: int) -> asyncpg.Record | None:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
