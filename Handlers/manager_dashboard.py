@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import html
+import logging
 
 import aiohttp
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
@@ -20,7 +22,21 @@ from manager_views import (
     build_manager_home_view,
 )
 
+logger = logging.getLogger(__name__)
+
 router = Router(name="manager_dashboard")
+
+
+async def _safe_answer(callback: CallbackQuery, *args, **kwargs) -> None:
+    # Если long-polling у бота на секунды/минуты обрывался (сетевой сбой),
+    # Telegram доставляет накопившиеся callback_query уже "протухшими" —
+    # answer() на них падает с TelegramBadRequest. К этому моменту реальное
+    # действие (запись в БД, следующее сообщение) уже должно было отработать
+    # — эта ошибка не должна ронять весь хендлер и прятать результат от юзера.
+    try:
+        await callback.answer(*args, **kwargs)
+    except TelegramBadRequest:
+        logger.warning("callback.answer() не прошёл (устаревший callback_query) — игнорируем")
 
 
 class DirectTextStates(StatesGroup):
@@ -77,7 +93,7 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"Текст ответа: {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
     lines.append(f"\nСтатус: {status_label}")
 
-    toggle_text = "⏸ Остановить" if media_row["is_active"] else "🚀 ЗАПУСТИТЬ ЗАЩИТУ"
+    toggle_text = "⏸ Остановить чат бот" if media_row["is_active"] else "🚀 Запустить чат бот"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=toggle_text,
@@ -115,12 +131,12 @@ async def refresh_stats_handler(callback: CallbackQuery, db: Database) -> None:
 
     view = await build_manager_home_view(db, callback.from_user.id)
     if view is None:
-        await callback.answer("Доступ утерян", show_alert=True)
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
         return
 
     text, keyboard = view
     await callback.message.edit_text(text, reply_markup=keyboard)
-    await callback.answer("Обновлено")
+    await _safe_answer(callback, "Обновлено")
 
 
 @router.callback_query(EditDirectTextCallback.filter())
@@ -130,7 +146,7 @@ async def edit_direct_text_handler(callback: CallbackQuery, state: FSMContext, d
 
     client = await db.get_client_by_manager_chat_id(callback.from_user.id)
     if client is None:
-        await callback.answer("Доступ утерян", show_alert=True)
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
         return
 
     current_text = client["custom_direct_text"] or build_private_reply_text(None)
@@ -145,7 +161,7 @@ async def edit_direct_text_handler(callback: CallbackQuery, state: FSMContext, d
         "на его место подставится имя клиента из Instagram.\n\n"
         "Для отмены — /cancel"
     )
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.message(
@@ -196,7 +212,7 @@ async def edit_thank_you_text_handler(callback: CallbackQuery, state: FSMContext
 
     client = await db.get_client_by_manager_chat_id(callback.from_user.id)
     if client is None:
-        await callback.answer("Доступ утерян", show_alert=True)
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
         return
 
     current_text = client["custom_thank_you_text"] or THANK_YOU_TEXT
@@ -210,7 +226,7 @@ async def edit_thank_you_text_handler(callback: CallbackQuery, state: FSMContext
         "написать просто текст без имени клиента.\n\n"
         "Для отмены — /cancel"
     )
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.message(DirectTextStates.waiting_for_thank_you_text)
@@ -242,7 +258,7 @@ async def add_media_handler(callback: CallbackQuery, state: FSMContext, db: Data
 
     client = await db.get_client_by_manager_chat_id(callback.from_user.id)
     if client is None:
-        await callback.answer("Доступ утерян", show_alert=True)
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
         return
 
     await state.set_state(MediaWizardStates.waiting_for_media_link)
@@ -251,7 +267,7 @@ async def add_media_handler(callback: CallbackQuery, state: FSMContext, db: Data
         "(например, https://www.instagram.com/p/XXXXXXXXXXX/) или прямой media_id.\n\n"
         "Для отмены — /cancel"
     )
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.message(MediaWizardStates.waiting_for_media_link)
@@ -322,7 +338,7 @@ async def configure_trigger_handler(callback: CallbackQuery, callback_data: Conf
         )],
     ])
     await callback.message.answer("⚙️ <b>Шаг 2/3.</b> На какие комментарии реагировать?", reply_markup=keyboard)
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.callback_query(SetTriggerTypeCallback.filter())
@@ -335,10 +351,12 @@ async def set_trigger_type_handler(
     if callback_data.trigger_type == "all_comments":
         ok = await db.set_media_trigger(callback.from_user.id, callback_data.media_id, "all_comments", [])
         if not ok:
-            await callback.answer("Доступ утерян", show_alert=True)
+            await _safe_answer(callback, "Доступ утерян", show_alert=True)
             return
-        await callback.answer()
+        # Реальное действие — ДО _safe_answer: если callback уже "протух"
+        # после разрыва соединения, юзер всё равно должен увидеть следующий шаг.
         await _prompt_reply_text_step(callback.message, callback_data.media_id)
+        await _safe_answer(callback)
         return
 
     await state.update_data(media_id=callback_data.media_id)
@@ -347,7 +365,7 @@ async def set_trigger_type_handler(
         "Пришли ключевые слова через запятую (например: цена, купить, +, сколько).\n\n"
         "Для отмены — /cancel"
     )
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.message(MediaWizardStates.waiting_for_keywords)
@@ -411,7 +429,7 @@ async def configure_reply_text_handler(
         "Для отмены — /cancel",
         reply_markup=keyboard,
     )
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.callback_query(SkipReplyTextCallback.filter())
@@ -421,7 +439,7 @@ async def skip_reply_text_handler(callback: CallbackQuery, callback_data: SkipRe
 
     await state.clear()
     await _show_media_card(callback.message, db, callback_data.media_id)
-    await callback.answer()
+    await _safe_answer(callback)
 
 
 @router.message(MediaWizardStates.waiting_for_reply_text)
@@ -469,17 +487,17 @@ async def toggle_media_active_handler(
 
     current = await db.get_monitored_media(callback_data.media_id)
     if current is None:
-        await callback.answer("Пост не найден", show_alert=True)
+        await _safe_answer(callback, "Пост не найден", show_alert=True)
         return
 
     updated = await db.set_media_active(callback.from_user.id, callback_data.media_id, not current["is_active"])
     if updated is None:
-        await callback.answer("Доступ утерян", show_alert=True)
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
         return
 
     text, keyboard = _build_media_card(updated)
     await callback.message.edit_text(text, reply_markup=keyboard)
-    await callback.answer("Запущено 🚀" if updated["is_active"] else "Остановлено ⏸")
+    await _safe_answer(callback, "Запущено 🚀" if updated["is_active"] else "Остановлено ⏸")
 
 
 @router.callback_query(DeleteMediaCallback.filter())
@@ -489,8 +507,8 @@ async def delete_media_handler(callback: CallbackQuery, callback_data: DeleteMed
 
     deleted = await db.delete_monitored_media(callback.from_user.id, callback_data.media_id)
     if not deleted:
-        await callback.answer("Доступ утерян или пост уже удалён", show_alert=True)
+        await _safe_answer(callback, "Доступ утерян или пост уже удалён", show_alert=True)
         return
 
     await callback.message.edit_text("🗑 Пост удалён из панели, бот больше не следит за его комментариями.")
-    await callback.answer("Удалено")
+    await _safe_answer(callback, "Удалено")
