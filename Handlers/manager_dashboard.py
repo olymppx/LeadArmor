@@ -116,7 +116,7 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"<b>Thank-you текст:</b> {'настроен ✏️' if media_row['thank_you_text'] else 'по умолчанию'}")
     lines.append(f"\n<b>Статус:</b> {status_label}")
 
-    toggle_text = "⏸ Остановить чат бот" if media_row["is_active"] else "🚀 Запустить чат бот"
+    toggle_text = "⏸ Остановить щит" if media_row["is_active"] else "🚀 ЗАПУСТИТЬ ЩИТ"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=toggle_text,
@@ -607,6 +607,7 @@ async def delete_media_handler(callback: CallbackQuery, callback_data: DeleteMed
         await _safe_answer(callback, "Доступ утерян или пост уже удалён", show_alert=True)
         return
 
+    logger.info("Пост media_id=%s удалён из панели пользователем chat_id=%s", callback_data.media_id, callback.from_user.id)
     await callback.message.edit_text("🗑 Пост удалён из панели, бот больше не следит за его комментариями.")
     await _safe_answer(callback, "Удалено")
     await _send_home_nudge(callback.message, db)

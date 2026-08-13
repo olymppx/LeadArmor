@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_REFRESH_TOKEN: str = ""
 
     LEAD_KEYWORDS: list[str] = [
-        "купить", "цена", "сколько стоит", "+",
+        "купить", "цена", "сколько стоит", "+", "малумот",
         "narxi", "нархи", "qancha", "қанча",
         "sotib olaman", "сотиб оламан", "buyurtma",
     ]

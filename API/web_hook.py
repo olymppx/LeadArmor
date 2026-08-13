@@ -164,10 +164,8 @@ async def proccess_comment(db: database.Database,
     # Private reply с запросом телефона — для ЛЮБОГО лида, независимо от post_type.
     # Никаких уведомлений менеджеру и записей в Sheets на этом этапе — только
     # когда клиент реально пришлёт номер (см. Handlers/user_direct.py).
-    # Текст ответа настраивается только на уровне конкретного поста — media_row
-    # уже получен выше, второй запрос в БД не нужен.
-    text_source = media_row["reply_text"]
-    message_text = meta_api.resolve_direct_reply_text(text_source, ig_username)
+    # media_row уже получен выше — второй запрос в БД не нужен.
+    message_text = meta_api.resolve_direct_reply_text(media_row["reply_text"], ig_username)
     logger.info("Резолвленный текст private reply для client_id=%s: %r", client["id"], message_text)
     reply_sent = await meta_api.send_private_reply(
         session, ig_business_id, comment_id, client["page_access_token"], message_text,

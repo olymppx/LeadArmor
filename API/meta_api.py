@@ -225,7 +225,7 @@ async def send_private_reply(
         return False
 
 
-async def send_thank_you_message(
+async def send_direct_message(
     session: aiohttp.ClientSession,
     ig_business_id: str,
     ig_user_id: str,
@@ -241,10 +241,12 @@ async def send_thank_you_message(
     async with session.post(url, params=params, json=payload) as resp:
         data = await resp.json()
         if resp.status == 200:
-            logger.info("Спасибо-сообщение отправлено ig_user_id=%s: %s", ig_user_id, data)
+            logger.info("Сообщение в Директ отправлено ig_user_id=%s: %s", ig_user_id, data)
             return True
         logger.error(
-            "Не удалось отправить спасибо-сообщение ig_user_id=%s (HTTP %s): %s",
+            "Не удалось отправить сообщение в Директ ig_user_id=%s (HTTP %s): %s",
             ig_user_id, resp.status, data,
         )
         return False
+
+

@@ -110,6 +110,14 @@ ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL 
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS post_type_override post_type_enum;
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS thank_you_text TEXT;
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS title TEXT;
+
+-- Удалено по прямому решению владельца: никаких "ИИ-агентов"/абстрактных
+-- диалогов в проекте, только жёсткий алгоритмический щит. Идемпотентный
+-- DROP снимает и колонку, и таблицу с любой БД, где успела прожить прошлая
+-- версия схемы — тот же паттерн, что и DROP COLUMN sheet_row выше.
+ALTER TABLE monitored_media DROP COLUMN IF EXISTS ai_prompt;
+DROP TABLE IF EXISTS ai_conversation_messages;
+DROP TYPE IF EXISTS ai_role_enum;
 """
 
 
