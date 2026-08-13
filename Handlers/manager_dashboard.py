@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from API.meta_api import THANK_YOU_TEXT, fetch_media_title, resolve_owned_media_id
+from API.meta_api import THANK_YOU_TEXT, build_private_reply_text, fetch_media_title, resolve_owned_media_id
 from DB.database import Database
 from manager_views import (
     AddMediaCallback,
@@ -428,10 +428,20 @@ async def _prompt_reply_text_step(message: Message, media_id: str) -> None:
 
 @router.callback_query(ConfigureReplyTextCallback.filter())
 async def configure_reply_text_handler(
-    callback: CallbackQuery, callback_data: ConfigureReplyTextCallback, state: FSMContext
+    callback: CallbackQuery, callback_data: ConfigureReplyTextCallback, state: FSMContext, db: Database
 ) -> None:
     if callback.from_user is None:
         return
+
+    media_row = await db.get_monitored_media(callback_data.media_id)
+    if media_row is None:
+        await _safe_answer(callback, "Пост не найден", show_alert=True)
+        return
+
+    current_text = media_row["reply_text"] or build_private_reply_text(None)
+    # Пост уже активен = это правка с карточки, а не первичная настройка —
+    # ярлык "Шаг 4/4" был бы враньём, показываем нейтральный заголовок.
+    header = "📝 <b>Шаг 4/4.</b>" if not media_row["is_active"] else "✏️ <b>Изменить текст ответа.</b>"
 
     await state.update_data(media_id=callback_data.media_id)
     await state.set_state(MediaWizardStates.waiting_for_reply_text)
@@ -443,7 +453,9 @@ async def configure_reply_text_handler(
         )
     ]])
     await callback.message.answer(
-        "📝 <b>Шаг 4/4.</b> Пришли текст, который бот отправит в Директ под этим постом. "
+        f"{header} Текущий текст:\n\n"
+        f"<code>{html.escape(current_text)}</code>\n\n"
+        "Пришли новый текст, который бот отправит в Директ под этим постом. "
         "Тег <code>{username}</code> подставит имя клиента из Instagram.\n\n"
         "Для отмены — /cancel",
         reply_markup=keyboard,
