@@ -80,16 +80,24 @@ class OpenMediaCallback(CallbackData, prefix="open_media"):
     media_id: str
 
 
+class SetPostTypeOverrideCallback(CallbackData, prefix="set_post_type"):
+    media_id: str
+    value: str  # "auto" | "organic" | "ad"
+
+
 TRIGGER_LABELS = {"all_comments": "Все комментарии", "keywords": "Ключевые слова"}
+POST_TYPE_LABELS = {"organic": "🌿 Всегда органика", "ad": "🎯 Всегда таргет", None: "🤖 Авто (по Meta)"}
 
 
 def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     trigger_label = TRIGGER_LABELS.get(media_row["trigger_type"], media_row["trigger_type"])
     status_label = "🟢 Активен" if media_row["is_active"] else "🔴 Выключен"
+    post_type_label = POST_TYPE_LABELS.get(media_row["post_type_override"], media_row["post_type_override"])
 
     lines = [
         "📋 <b>Карточка публикации</b>\n",
         f"Пост: <code>{html.escape(media_row['media_id'])}</code>",
+        f"Тип поста: {post_type_label}",
         f"Триггер: {trigger_label}",
     ]
     if media_row["trigger_type"] == "keywords":
@@ -309,7 +317,7 @@ async def add_media_handler(callback: CallbackQuery, state: FSMContext, db: Data
 
     await state.set_state(MediaWizardStates.waiting_for_media_link)
     await callback.message.answer(
-        "🔗 <b>Шаг 1/3.</b> Пришли ссылку на пост/видео/рекламный креатив в Instagram "
+        "🔗 <b>Шаг 1/4.</b> Пришли ссылку на пост/видео/рекламный креатив в Instagram "
         "(например, https://www.instagram.com/p/XXXXXXXXXXX/) или прямой media_id.\n\n"
         "Для отмены — /cancel"
     )
@@ -365,17 +373,50 @@ async def receive_media_link_handler(
         await _show_media_card(message, db, media_id)
         return
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🤖 Авто (по Meta)",
+            callback_data=SetPostTypeOverrideCallback(media_id=media_id, value="auto").pack(),
+        )],
+        [InlineKeyboardButton(
+            text="🌿 Всегда органика",
+            callback_data=SetPostTypeOverrideCallback(media_id=media_id, value="organic").pack(),
+        )],
+        [InlineKeyboardButton(
+            text="🎯 Всегда таргет",
+            callback_data=SetPostTypeOverrideCallback(media_id=media_id, value="ad").pack(),
+        )],
+    ])
+    await message.answer(
+        f"✅ Пост добавлен (media_id=<code>{html.escape(media_id)}</code>).\n\n"
+        "🎯 <b>Шаг 2/4.</b> Тип поста для этой публикации. Meta сама определяет "
+        "органику/таргет по каждому комментарию — обычно этого достаточно. "
+        "Выбери вручную, только если Meta ошибается именно на этом посте.",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(SetPostTypeOverrideCallback.filter())
+async def set_post_type_override_handler(
+    callback: CallbackQuery, callback_data: SetPostTypeOverrideCallback, db: Database
+) -> None:
+    if callback.from_user is None:
+        return
+
+    override_value = None if callback_data.value == "auto" else callback_data.value
+    ok = await db.set_media_post_type_override(callback.from_user.id, callback_data.media_id, override_value)
+    if not ok:
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
+        return
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="⚙️ Настроить условия",
-            callback_data=ConfigureTriggerCallback(media_id=media_id).pack(),
+            callback_data=ConfigureTriggerCallback(media_id=callback_data.media_id).pack(),
         )
     ]])
-    await message.answer(
-        f"✅ Пост добавлен (media_id=<code>{html.escape(media_id)}</code>).\n"
-        "Дальше — на какие комментарии реагировать.",
-        reply_markup=keyboard,
-    )
+    await callback.message.answer("Тип поста сохранён. Дальше — на какие комментарии реагировать.", reply_markup=keyboard)
+    await _safe_answer(callback)
 
 
 @router.callback_query(ConfigureTriggerCallback.filter())
@@ -393,7 +434,7 @@ async def configure_trigger_handler(callback: CallbackQuery, callback_data: Conf
             callback_data=SetTriggerTypeCallback(media_id=callback_data.media_id, trigger_type="keywords").pack(),
         )],
     ])
-    await callback.message.answer("⚙️ <b>Шаг 2/3.</b> На какие комментарии реагировать?", reply_markup=keyboard)
+    await callback.message.answer("⚙️ <b>Шаг 3/4.</b> На какие комментарии реагировать?", reply_markup=keyboard)
     await _safe_answer(callback)
 
 
@@ -480,7 +521,7 @@ async def configure_reply_text_handler(
         )
     ]])
     await callback.message.answer(
-        "📝 <b>Шаг 3/3.</b> Пришли текст, который бот отправит в Директ под этим постом. "
+        "📝 <b>Шаг 4/4.</b> Пришли текст, который бот отправит в Директ под этим постом. "
         "Тег <code>{username}</code> подставит имя клиента из Instagram.\n\n"
         "Для отмены — /cancel",
         reply_markup=keyboard,

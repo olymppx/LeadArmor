@@ -140,7 +140,9 @@ async def proccess_comment(db: database.Database,
         )
         return
 
-    post_type = meta_api.classify_post_type(media_product_type)
+    # Ручной override из карточки поста побеждает автоопределение Meta —
+    # на случай если media_product_type для конкретного поста определяется неверно.
+    post_type = media_row["post_type_override"] or meta_api.classify_post_type(media_product_type)
     lead_id = await db.add_lead(
         client_id=client["id"],
         ig_comment_id = comment_id,

@@ -106,6 +106,9 @@ ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS reply_text TEXT;
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS trigger_type trigger_type_enum NOT NULL DEFAULT 'keywords';
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS keywords_list TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE;
+-- NULL = доверяем автоопределению Meta (media_product_type) как и раньше.
+-- Заполнено — жёсткий ручной override на случай, если Meta ошибается на конкретном посте.
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS post_type_override post_type_enum;
 """
 
 
@@ -359,6 +362,26 @@ class Database:
                 media_id,
                 manager_chat_id,
                 reply_text,
+            )
+        return result == "UPDATE 1"
+
+    async def set_media_post_type_override(
+        self, manager_chat_id: int, media_id: str, post_type_override: str | None
+    ) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE monitored_media
+                SET post_type_override = $3::post_type_enum
+                FROM clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                """,
+                media_id,
+                manager_chat_id,
+                post_type_override,
             )
         return result == "UPDATE 1"
 
