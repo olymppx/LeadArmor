@@ -114,6 +114,16 @@ async def proccess_comment(db: database.Database,
         logger.info("Комментарий от самого бизнес-аккаунта — пропускаем")
         return
 
+    # Granular Media Targeting: бот работает СТРОГО под явно добавленными
+    # публикациями. Пустая monitored_media = тишина на всём аккаунте — так и
+    # задумано, это не баг фильтрации по ключевым словам ниже.
+    if not await db.is_media_monitored(media_id):
+        logger.debug(
+            "media_id=%s не под защитой LeadArmor (ig_business_id=%s) — комментарий проигнорирован",
+            media_id, ig_business_id,
+        )
+        return
+
     text_lower = comment_text.lower()
     if not any(keyword.lower() in text_lower for keyword in settings.LEAD_KEYWORDS):
         logger.info("Нет триггер-слова в комментарии %r — пропускаем", comment_text)
@@ -151,7 +161,9 @@ async def proccess_comment(db: database.Database,
     # когда клиент реально пришлёт номер (см. Handlers/user_direct.py).
     # custom_direct_text уже в client (SELECT * в get_client_by_id) — второй
     # запрос в БД на каждый комментарий не нужен.
-    message_text = meta_api.resolve_direct_reply_text(client["custom_direct_text"], ig_username)
+    media_custom_text = await db.get_monitored_media_custom_text(media_id)
+    text_source = media_custom_text or client["custom_direct_text"]
+    message_text = meta_api.resolve_direct_reply_text(text_source, ig_username)
     logger.info("Резолвленный текст private reply для client_id=%s: %r", client["id"], message_text)
     reply_sent = await meta_api.send_private_reply(
         session, ig_business_id, comment_id, client["page_access_token"], message_text,
@@ -159,11 +171,11 @@ async def proccess_comment(db: database.Database,
     if reply_sent:
         await db.update_lead_status(lead_id, "phone_requested")
 
-def create_app(db: Database, bot : Bot) -> web.Application:
+def create_app(db: Database, bot: Bot, http_session: aiohttp.ClientSession) -> web.Application:
     app = web.Application()
     app["db"] = db
     app["bot"] = bot
-    app["http_session"] = aiohttp.ClientSession()
+    app["http_session"] = http_session
 
     app.router.add_get(WEBHOOK_PATH, verify_handler)
     app.router.add_post(WEBHOOK_PATH, events_handler)
@@ -171,8 +183,4 @@ def create_app(db: Database, bot : Bot) -> web.Application:
     app.router.add_get("/oauth/google/callback", google_oauth_callback_handler)
     app.router.add_get("/legal/privacy", privacy_policy_handler)
 
-    async def _cleanup(app: web.Application) -> None:
-        await app["http_session"].close()
-
-    app.on_cleanup.append(_cleanup)
     return app

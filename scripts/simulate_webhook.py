@@ -37,10 +37,12 @@ def send(payload: dict, url: str) -> None:
         print(f"HTTP {error.code}: {error.read().decode('utf-8')}")
 
 
-def build_comment_payload(ig_business_id: str, media_product_type: str, text: str) -> tuple[dict, str, str]:
+def build_comment_payload(
+    ig_business_id: str, media_product_type: str, text: str, media_id: str | None = None
+) -> tuple[dict, str, str, str]:
     comment_id = f"test_comment_{uuid.uuid4().hex[:12]}"
     ig_user_id = f"test_user_{uuid.uuid4().hex[:8]}"
-    media_id = f"test_media_{uuid.uuid4().hex[:12]}"
+    media_id = media_id or f"test_media_{uuid.uuid4().hex[:12]}"
     payload = {
         "object": "instagram",
         "entry": [
@@ -60,7 +62,7 @@ def build_comment_payload(ig_business_id: str, media_product_type: str, text: st
             }
         ],
     }
-    return payload, comment_id, ig_user_id
+    return payload, comment_id, ig_user_id, media_id
 
 
 def build_message_payload(ig_business_id: str, ig_user_id: str, text: str) -> dict:
@@ -96,19 +98,26 @@ def main() -> None:
         help="Только для scenario=phone — тот же ig_user_id, что был в ad-комментарии",
     )
     parser.add_argument("--text", default=None)
+    parser.add_argument("--media-id", default=None, help="Зафиксировать конкретный media_id вместо случайного")
     parser.add_argument("--url", default=DEFAULT_URL)
     args = parser.parse_args()
 
     if args.scenario == "ad":
         text = args.text or "цена?"
-        payload, comment_id, ig_user_id = build_comment_payload(args.ig_business_id, "AD", text)
+        payload, comment_id, ig_user_id, media_id = build_comment_payload(
+            args.ig_business_id, "AD", text, media_id=args.media_id
+        )
         print(f"comment_id={comment_id}")
         print(f"ig_user_id={ig_user_id}  <-- сохрани для scenario=phone")
+        print(f"media_id={media_id}")
     elif args.scenario == "organic":
         text = args.text or "цена?"
-        payload, comment_id, ig_user_id = build_comment_payload(args.ig_business_id, "FEED", text)
+        payload, comment_id, ig_user_id, media_id = build_comment_payload(
+            args.ig_business_id, "FEED", text, media_id=args.media_id
+        )
         print(f"comment_id={comment_id}")
         print(f"ig_user_id={ig_user_id}")
+        print(f"media_id={media_id}")
     else:
         if not args.ig_user_id:
             parser.error("--ig-user-id обязателен для scenario=phone")

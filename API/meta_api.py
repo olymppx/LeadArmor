@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 
 import aiohttp
 
@@ -67,6 +68,72 @@ async def hide_comment(session: aiohttp.ClientSession, comment_id: str, access_t
             return True
         logger.error("Не удалось скрыть комментарий %s (HTTP %s): %s", comment_id, resp.status, data)
         return False
+
+SHORTCODE_PATTERN = re.compile(r"instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)")
+
+
+async def _verify_owned_media_id(
+    session: aiohttp.ClientSession, access_token: str, media_id: str
+) -> str | None:
+    # Прямой числовой ID подтверждаем через Graph API тем же токеном, что и
+    # владелец аккаунта — если media чужой, Meta сама откажет по правам доступа.
+    url = f"{GRAPH_API_BASE}/{media_id}"
+    params = {"fields": "id", "access_token": access_token}
+    async with session.get(url, params=params) as resp:
+        data = await resp.json()
+        if resp.status == 200 and data.get("id"):
+            return data["id"]
+        logger.warning("media_id %s не подтверждён Graph API (HTTP %s): %s", media_id, resp.status, data)
+        return None
+
+
+async def _find_media_id_by_shortcode(
+    session: aiohttp.ClientSession, ig_business_id: str, access_token: str, shortcode: str
+) -> str | None:
+    # Shortcode из ссылки (instagram.com/p/XXXX/) — это НЕ Graph API media_id,
+    # конвертера между ними не существует. Единственный надёжный способ —
+    # пройтись по собственным медиа аккаунта и сопоставить по permalink.
+    url = f"{GRAPH_API_BASE}/{ig_business_id}/media"
+    params: dict[str, str] = {"fields": "id,permalink", "access_token": access_token, "limit": "50"}
+
+    for _ in range(5):  # максимум ~250 последних постов, защита от бесконечной пагинации
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                logger.error(
+                    "Не удалось получить список медиа %s (HTTP %s): %s", ig_business_id, resp.status, data
+                )
+                return None
+
+            for item in data.get("data", []):
+                if shortcode in item.get("permalink", ""):
+                    return item["id"]
+
+            next_url = data.get("paging", {}).get("next")
+            if not next_url:
+                return None
+            url, params = next_url, {}
+
+    return None
+
+
+async def resolve_owned_media_id(
+    session: aiohttp.ClientSession,
+    ig_business_id: str,
+    access_token: str,
+    user_input: str,
+) -> str | None:
+    user_input = user_input.strip()
+
+    shortcode_match = SHORTCODE_PATTERN.search(user_input)
+    if shortcode_match is not None:
+        return await _find_media_id_by_shortcode(session, ig_business_id, access_token, shortcode_match.group(1))
+
+    if user_input.isdigit():
+        return await _verify_owned_media_id(session, access_token, user_input)
+
+    return None
+
 
 def build_private_reply_text(username: str | None) -> str:
     name_part = f"@{username}" if username else "mijoz"

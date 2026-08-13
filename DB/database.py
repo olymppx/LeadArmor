@@ -69,6 +69,19 @@ CREATE TABLE IF NOT EXISTS leads (
 ALTER TABLE leads DROP COLUMN IF EXISTS sheet_row;
 
 CREATE INDEX IF NOT EXISTS idx_leads_ig_user_id ON leads(ig_user_id);
+
+-- Granular Media Targeting: бот обрабатывает комментарии СТРОГО под теми
+-- публикациями, что явно добавлены сюда через Telegram-админку. Пустая
+-- таблица = бот молчит на всём аккаунте (осознанное поведение, не баг).
+CREATE TABLE IF NOT EXISTS monitored_media (
+    id                SERIAL PRIMARY KEY,
+    ig_business_id    VARCHAR(64) NOT NULL REFERENCES clients(ig_business_id) ON DELETE CASCADE,
+    media_id          VARCHAR(64) NOT NULL UNIQUE,
+    custom_text       TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitored_media_ig_business_id ON monitored_media(ig_business_id);
 """
 
 
@@ -241,6 +254,64 @@ class Database:
                 "UPDATE clients SET custom_thank_you_text = $2 WHERE manager_chat_id = $1",
                 manager_chat_id,
                 new_text,
+            )
+        return result == "UPDATE 1"
+
+    async def is_media_monitored(self, media_id: str) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM monitored_media WHERE media_id = $1)",
+                media_id,
+            ))
+
+    async def get_monitored_media_custom_text(self, media_id: str) -> str | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT custom_text FROM monitored_media WHERE media_id = $1",
+                media_id,
+            )
+
+    async def add_media_to_monitor(self, ig_business_id: str, media_id: str) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO monitored_media (ig_business_id, media_id)
+                VALUES ($1, $2)
+                ON CONFLICT (media_id) DO NOTHING
+                RETURNING id;
+                """,
+                ig_business_id,
+                media_id,
+            )
+            if row is not None:
+                return True
+
+            # media_id уже занят — считаем успехом только если тем же аккаунтом
+            # (идемпотентное повторное добавление), а не чужим (Meta media_id
+            # уникальны глобально, но лишняя защита от кросс-тенантной путаницы не помешает).
+            owner = await conn.fetchval(
+                "SELECT ig_business_id FROM monitored_media WHERE media_id = $1", media_id
+            )
+            return owner == ig_business_id
+
+    async def set_media_custom_text(self, manager_chat_id: int, media_id: str, custom_text: str) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE monitored_media
+                SET custom_text = $3
+                FROM clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                """,
+                media_id,
+                manager_chat_id,
+                custom_text,
             )
         return result == "UPDATE 1"
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -33,9 +34,13 @@ async def main() -> None:
     bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp["db"] = db
+
+    http_session = aiohttp.ClientSession()
+    dp["http_session"] = http_session
+
     dp.include_routers(*routers)
 
-    app = create_app(db, bot)
+    app = create_app(db, bot, http_session)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=8000)
@@ -55,6 +60,7 @@ async def main() -> None:
         await dp.start_polling(bot)
     finally:
         await runner.cleanup()
+        await http_session.close()
         await db.disconnect()
         await bot.session.close()
 
