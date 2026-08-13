@@ -94,16 +94,16 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
 
     lines = [
         "📋 <b>Карточка публикации</b>\n",
-        f"Пост: <code>{html.escape(media_row['media_id'])}</code>",
-        f"Тип поста: {post_type_label}",
-        f"Триггер: {trigger_label}",
+        f"<b>Пост:</b> <code>{html.escape(media_row['media_id'])}</code>",
+        f"<b>Тип поста:</b> {post_type_label}",
+        f"<b>Триггер:</b> {trigger_label}",
     ]
     if media_row["trigger_type"] == "keywords":
         keywords = media_row["keywords_list"] or []
-        lines.append(f"Ключевые слова: {', '.join(keywords) if keywords else '—'}")
-    lines.append(f"Текст ответа: {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
-    lines.append(f"Thank-you текст: {'настроен ✏️' if media_row['thank_you_text'] else 'по умолчанию'}")
-    lines.append(f"\nСтатус: {status_label}")
+        lines.append(f"<b>Ключевые слова:</b> {', '.join(keywords) if keywords else '—'}")
+    lines.append(f"<b>Текст ответа:</b> {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
+    lines.append(f"<b>Thank-you текст:</b> {'настроен ✏️' if media_row['thank_you_text'] else 'по умолчанию'}")
+    lines.append(f"\n<b>Статус:</b> {status_label}")
 
     toggle_text = "⏸ Остановить чат бот" if media_row["is_active"] else "🚀 Запустить чат бот"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
