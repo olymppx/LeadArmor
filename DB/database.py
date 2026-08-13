@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import asyncpg
 
+from API.meta_api import build_private_reply_text
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS clients (
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS trial_starts_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS google_sheet_id VARCHAR(128);
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS custom_direct_text TEXT;
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS custom_thank_you_text TEXT;
 
 CREATE TABLE IF NOT EXISTS leads (
     id                  BIGSERIAL PRIMARY KEY,
@@ -212,6 +215,35 @@ class Database:
                 google_sheet_id,
             )
 
+    async def get_custom_direct_text(self, ig_business_id: str) -> str:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval(
+                "SELECT custom_direct_text FROM clients WHERE ig_business_id = $1",
+                ig_business_id,
+            )
+        return value or build_private_reply_text(None)
+
+    async def update_custom_direct_text(self, manager_chat_id: int, new_text: str) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE clients SET custom_direct_text = $2 WHERE manager_chat_id = $1",
+                manager_chat_id,
+                new_text,
+            )
+        return result == "UPDATE 1"
+
+    async def update_custom_thank_you_text(self, manager_chat_id: int, new_text: str) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE clients SET custom_thank_you_text = $2 WHERE manager_chat_id = $1",
+                manager_chat_id,
+                new_text,
+            )
+        return result == "UPDATE 1"
+
     async def extend_subscription(self, ig_business_id: str, days: int) -> asyncpg.Record | None:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
@@ -318,7 +350,8 @@ class Database:
                 RETURNING leads.id, leads.client_id, leads.ig_username, leads.post_type,
                           leads.is_comment_removed, leads.status,
                           clients.manager_chat_id, clients.name AS client_name,
-                          clients.google_sheet_id, clients.page_access_token;
+                          clients.google_sheet_id, clients.page_access_token,
+                          clients.custom_thank_you_text;
                 """,
                 ig_business_id,
                 ig_user_id,

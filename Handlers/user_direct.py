@@ -6,7 +6,7 @@ import re
 import aiohttp
 from aiogram import Bot
 
-from API.meta_api import send_thank_you_message
+from API.meta_api import resolve_thank_you_text, send_thank_you_message
 from API.sheets import append_confirmed_lead
 from DB.database import Database
 from Handlers.manager_alerts import notify_manager_about_phone_received
@@ -98,11 +98,14 @@ async def process_direct_message(
         status=updated_lead["status"],
     )
 
+    thank_you_text = resolve_thank_you_text(updated_lead["custom_thank_you_text"], updated_lead["ig_username"])
+    logger.info("Резолвленный thank-you текст для client_id=%s: %r", updated_lead["client_id"], thank_you_text)
     await send_thank_you_message(
         session=session,
         ig_business_id=ig_business_id,
         ig_user_id=ig_user_id,
         access_token=updated_lead["page_access_token"],
+        message_text=thank_you_text,
     )
 
     await notify_manager_about_phone_received(

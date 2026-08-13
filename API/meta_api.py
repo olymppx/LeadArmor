@@ -76,6 +76,17 @@ def build_private_reply_text(username: str | None) -> str:
         "va biz sizga bog'lanamiz \U0001F680\U0001F6E1"
     )
 
+def resolve_direct_reply_text(custom_text: str | None, username: str | None) -> str:
+    if not custom_text:
+        return build_private_reply_text(username)
+
+    # .replace, а не .format() — custom_text вводит бизнес-клиент через Telegram.
+    # str.format() на чужом вводе — format-string injection: {username.__class__...}
+    # улетит в реальный Instagram Direct. replace() не резолвит атрибуты, безопасно.
+    name_part = f"@{username}" if username else "mijoz"
+    return custom_text.replace("{username}", name_part)
+
+
 QUICK_REPLY_PAYLOAD = "SEND_PHONE_NUMBER"
 QUICK_REPLY_TITLE = "\U0001F4DE Telefon raqamni yuborish"
 
@@ -83,6 +94,16 @@ THANK_YOU_TEXT = (
     "Rahmat! Sizning so'rovingiz qabul qilindi va menedjerimiz "
     "siz bilan tez orada bog'lanadi!\U0001F680\U0001F6E1"
 )
+
+
+def resolve_thank_you_text(custom_text: str | None, username: str | None) -> str:
+    if not custom_text:
+        return THANK_YOU_TEXT
+
+    # Тег {username} необязателен здесь (в отличие от direct-reply) — это
+    # финальное сообщение "спасибо", многим клиентам достаточно текста без имени.
+    name_part = f"@{username}" if username else "mijoz"
+    return custom_text.replace("{username}", name_part)
 
 # Требует в Meta App Dashboard одобренных прав instagram_business_basic,
 # instagram_business_manage_comments, instagram_business_manage_messages
@@ -92,14 +113,14 @@ async def send_private_reply(
     ig_business_id: str,
     comment_id: str,
     access_token: str,
-    username: str | None = None,
+    message_text: str,
 ) -> bool:
     url = f"{GRAPH_API_BASE}/{ig_business_id}/messages"
     params = {"access_token": access_token}
     payload = {
         "recipient": {"comment_id": comment_id},
         "message": {
-            "text": build_private_reply_text(username),
+            "text": message_text,
             "quick_replies": [
                 {
                     "content_type": "text",
@@ -129,12 +150,13 @@ async def send_thank_you_message(
     ig_business_id: str,
     ig_user_id: str,
     access_token: str,
+    message_text: str,
 ) -> bool:
     url = f"{GRAPH_API_BASE}/{ig_business_id}/messages"
     params = {"access_token": access_token}
     payload = {
         "recipient": {"id": ig_user_id},
-        "message": {"text": THANK_YOU_TEXT},
+        "message": {"text": message_text},
     }
     async with session.post(url, params=params, json=payload) as resp:
         data = await resp.json()
