@@ -71,17 +71,41 @@ ALTER TABLE leads DROP COLUMN IF EXISTS sheet_row;
 CREATE INDEX IF NOT EXISTS idx_leads_ig_user_id ON leads(ig_user_id);
 
 -- Granular Media Targeting: бот обрабатывает комментарии СТРОГО под теми
--- публикациями, что явно добавлены сюда через Telegram-админку. Пустая
+-- публикациями, что явно добавлены сюда через Telegram-конструктор. Пустая
 -- таблица = бот молчит на всём аккаунте (осознанное поведение, не баг).
 CREATE TABLE IF NOT EXISTS monitored_media (
     id                SERIAL PRIMARY KEY,
     ig_business_id    VARCHAR(64) NOT NULL REFERENCES clients(ig_business_id) ON DELETE CASCADE,
     media_id          VARCHAR(64) NOT NULL UNIQUE,
-    custom_text       TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitored_media_ig_business_id ON monitored_media(ig_business_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trigger_type_enum') THEN
+        CREATE TYPE trigger_type_enum AS ENUM ('all_comments', 'keywords');
+    END IF;
+END$$;
+
+-- custom_text переименован в reply_text (ChatPlace-style flow: пост ->
+-- условия -> текст ответа -> запуск). Переименование идемпотентно —
+-- на повторных стартах колонки custom_text уже не будет, блок не сработает.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'monitored_media' AND column_name = 'custom_text'
+    ) THEN
+        ALTER TABLE monitored_media RENAME COLUMN custom_text TO reply_text;
+    END IF;
+END$$;
+
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS reply_text TEXT;
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS trigger_type trigger_type_enum NOT NULL DEFAULT 'keywords';
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS keywords_list TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 
@@ -257,19 +281,19 @@ class Database:
             )
         return result == "UPDATE 1"
 
-    async def is_media_monitored(self, media_id: str) -> bool:
-        assert self.pool is not None
-        async with self.pool.acquire() as conn:
-            return bool(await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM monitored_media WHERE media_id = $1)",
-                media_id,
-            ))
-
-    async def get_monitored_media_custom_text(self, media_id: str) -> str | None:
+    async def count_active_media(self, ig_business_id: str) -> int:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
-                "SELECT custom_text FROM monitored_media WHERE media_id = $1",
+                "SELECT COUNT(*) FROM monitored_media WHERE ig_business_id = $1 AND is_active = TRUE",
+                ig_business_id,
+            )
+
+    async def get_monitored_media(self, media_id: str) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT * FROM monitored_media WHERE media_id = $1",
                 media_id,
             )
 
@@ -278,32 +302,35 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO monitored_media (ig_business_id, media_id)
-                VALUES ($1, $2)
+                INSERT INTO monitored_media (ig_business_id, media_id, trigger_type, keywords_list, is_active)
+                VALUES ($1, $2, 'keywords', $3, FALSE)
                 ON CONFLICT (media_id) DO NOTHING
                 RETURNING id;
                 """,
                 ig_business_id,
                 media_id,
+                settings.LEAD_KEYWORDS,  # стартовые ключевые слова — можно перенастроить на Шаге 2
             )
             if row is not None:
                 return True
 
             # media_id уже занят — считаем успехом только если тем же аккаунтом
-            # (идемпотентное повторное добавление), а не чужим (Meta media_id
-            # уникальны глобально, но лишняя защита от кросс-тенантной путаницы не помешает).
+            # (идемпотентное повторное добавление/резюме мастера настройки), а не
+            # чужим (Meta media_id уникальны глобально, лишняя защита от кросс-тенантной путаницы не помешает).
             owner = await conn.fetchval(
                 "SELECT ig_business_id FROM monitored_media WHERE media_id = $1", media_id
             )
             return owner == ig_business_id
 
-    async def set_media_custom_text(self, manager_chat_id: int, media_id: str, custom_text: str) -> bool:
+    async def set_media_trigger(
+        self, manager_chat_id: int, media_id: str, trigger_type: str, keywords_list: list[str]
+    ) -> bool:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
             result = await conn.execute(
                 """
                 UPDATE monitored_media
-                SET custom_text = $3
+                SET trigger_type = $3::trigger_type_enum, keywords_list = $4
                 FROM clients
                 WHERE monitored_media.media_id = $1
                   AND monitored_media.ig_business_id = clients.ig_business_id
@@ -311,9 +338,62 @@ class Database:
                 """,
                 media_id,
                 manager_chat_id,
-                custom_text,
+                trigger_type,
+                keywords_list,
             )
         return result == "UPDATE 1"
+
+    async def set_media_reply_text(self, manager_chat_id: int, media_id: str, reply_text: str | None) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE monitored_media
+                SET reply_text = $3
+                FROM clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                """,
+                media_id,
+                manager_chat_id,
+                reply_text,
+            )
+        return result == "UPDATE 1"
+
+    async def set_media_active(self, manager_chat_id: int, media_id: str, is_active: bool) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                UPDATE monitored_media
+                SET is_active = $3
+                FROM clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                RETURNING monitored_media.*;
+                """,
+                media_id,
+                manager_chat_id,
+                is_active,
+            )
+
+    async def delete_monitored_media(self, manager_chat_id: int, media_id: str) -> bool:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                DELETE FROM monitored_media
+                USING clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                """,
+                media_id,
+                manager_chat_id,
+            )
+        return result == "DELETE 1"
 
     async def extend_subscription(self, ig_business_id: str, days: int) -> asyncpg.Record | None:
         assert self.pool is not None

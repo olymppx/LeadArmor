@@ -114,20 +114,23 @@ async def proccess_comment(db: database.Database,
         logger.info("Комментарий от самого бизнес-аккаунта — пропускаем")
         return
 
-    # Granular Media Targeting: бот работает СТРОГО под явно добавленными
-    # публикациями. Пустая monitored_media = тишина на всём аккаунте — так и
-    # задумано, это не баг фильтрации по ключевым словам ниже.
-    if not await db.is_media_monitored(media_id):
+    # Granular Media Targeting: бот работает СТРОГО под постами, явно
+    # добавленными и ЗАПУЩЕННЫМИ через Telegram-конструктор. Нет записи или
+    # is_active=False — тишина, это осознанное поведение, а не баг фильтра ниже.
+    media_row = await db.get_monitored_media(media_id)
+    if media_row is None or not media_row["is_active"]:
         logger.debug(
-            "media_id=%s не под защитой LeadArmor (ig_business_id=%s) — комментарий проигнорирован",
+            "media_id=%s не запущен в LeadArmor (ig_business_id=%s) — комментарий проигнорирован",
             media_id, ig_business_id,
         )
         return
 
     text_lower = comment_text.lower()
-    if not any(keyword.lower() in text_lower for keyword in settings.LEAD_KEYWORDS):
-        logger.info("Нет триггер-слова в комментарии %r — пропускаем", comment_text)
-        return
+    if media_row["trigger_type"] == "keywords":
+        if not any(keyword.lower() in text_lower for keyword in media_row["keywords_list"]):
+            logger.info("Нет триггер-слова в комментарии %r под media_id=%s — пропускаем", comment_text, media_id)
+            return
+    # trigger_type == "all_comments" — реагируем на любой комментарий без проверки слов.
 
     client = await db.get_client_by_id(ig_business_id)
     if client is None:
@@ -159,10 +162,9 @@ async def proccess_comment(db: database.Database,
     # Private reply с запросом телефона — для ЛЮБОГО лида, независимо от post_type.
     # Никаких уведомлений менеджеру и записей в Sheets на этом этапе — только
     # когда клиент реально пришлёт номер (см. Handlers/user_direct.py).
-    # custom_direct_text уже в client (SELECT * в get_client_by_id) — второй
-    # запрос в БД на каждый комментарий не нужен.
-    media_custom_text = await db.get_monitored_media_custom_text(media_id)
-    text_source = media_custom_text or client["custom_direct_text"]
+    # Приоритет текста: свой текст поста > общий Direct-текст клиента > дефолт.
+    # media_row уже получен выше — второй запрос в БД не нужен.
+    text_source = media_row["reply_text"] or client["custom_direct_text"]
     message_text = meta_api.resolve_direct_reply_text(text_source, ig_username)
     logger.info("Резолвленный текст private reply для client_id=%s: %r", client["id"], message_text)
     reply_sent = await meta_api.send_private_reply(

@@ -12,6 +12,7 @@ from aiohttp import web
 from API.sheets import create_client_spreadsheet
 from DB.database import Database
 from config import settings
+from manager_views import build_manager_home_view
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +168,11 @@ async def oauth_callback_handler(request: web.Request) -> web.Response:
     if sheet_id:
         await db.set_client_sheet_id(ig_business_id, sheet_id)
 
-    await bot.send_message(
-        tg_chat_id,
-        f"✅ Instagram-аккаунт @{username} подключён к LeadArmor!\n\n"
-        f"Триал на {settings.TRIAL_DAYS} дня уже активен. Как только под вашей рекламой "
-        f"или постом появится комментарий с ключевым словом — пришлю уведомление сюда.",
-    )
+    home_view = await build_manager_home_view(db, tg_chat_id)
+    if home_view is not None:
+        text, keyboard = home_view
+        await bot.send_message(tg_chat_id, text, reply_markup=keyboard)
+    else:
+        await bot.send_message(tg_chat_id, f"✅ Instagram-аккаунт @{username} подключён к LeadArmor!")
 
     return web.Response(text=f"Готово! Аккаунт @{username} подключён. Вернитесь в Telegram.", status=200)

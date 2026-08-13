@@ -12,6 +12,13 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from API.meta_api import THANK_YOU_TEXT, build_private_reply_text, resolve_owned_media_id
 from DB.database import Database
+from manager_views import (
+    AddMediaCallback,
+    EditDirectTextCallback,
+    EditThankYouTextCallback,
+    RefreshStatsCallback,
+    build_manager_home_view,
+)
 
 router = Router(name="manager_dashboard")
 
@@ -21,88 +28,67 @@ class DirectTextStates(StatesGroup):
     waiting_for_thank_you_text = State()
 
 
-class MediaStates(StatesGroup):
+class MediaWizardStates(StatesGroup):
     waiting_for_media_link = State()
-    waiting_for_media_text = State()
-
-STATUS_LABELS = {
-    "new": "🆕 Новый",
-    "notified": "📨 Уведомлён",
-    "phone_requested": "📞 Запрошен телефон",
-    "phone_received": "✅ Телефон получен",
-    "closed": "🔒 Закрыт",
-}
+    waiting_for_keywords = State()
+    waiting_for_reply_text = State()
 
 
-class RefreshStatsCallback(CallbackData, prefix="mystats_refresh"):
-    pass
-
-
-class EditDirectTextCallback(CallbackData, prefix="edit_direct_text"):
-    pass
-
-
-class EditThankYouTextCallback(CallbackData, prefix="edit_thank_you_text"):
-    pass
-
-
-class AddMediaCallback(CallbackData, prefix="add_media"):
-    pass
-
-
-class EditMediaTextCallback(CallbackData, prefix="edit_media_text"):
+class ConfigureTriggerCallback(CallbackData, prefix="cfg_trigger"):
     media_id: str
 
 
-async def _build_mystats_view(db: Database, manager_chat_id: int) -> tuple[str, InlineKeyboardMarkup] | None:
-    client = await db.get_client_by_manager_chat_id(manager_chat_id)
-    if client is None:
-        return None
+class SetTriggerTypeCallback(CallbackData, prefix="set_trigger_type"):
+    media_id: str
+    trigger_type: str
 
-    stats = await db.get_leads_stats_for_manager(manager_chat_id)
-    recent = await db.get_recent_leads_for_manager(manager_chat_id, limit=5)
+
+class ConfigureReplyTextCallback(CallbackData, prefix="cfg_reply_text"):
+    media_id: str
+
+
+class SkipReplyTextCallback(CallbackData, prefix="skip_reply_text"):
+    media_id: str
+
+
+class ToggleMediaActiveCallback(CallbackData, prefix="toggle_media"):
+    media_id: str
+
+
+class DeleteMediaCallback(CallbackData, prefix="delete_media"):
+    media_id: str
+
+
+TRIGGER_LABELS = {"all_comments": "Все комментарии", "keywords": "Ключевые слова"}
+
+
+def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
+    trigger_label = TRIGGER_LABELS.get(media_row["trigger_type"], media_row["trigger_type"])
+    status_label = "🟢 Активен" if media_row["is_active"] else "🔴 Выключен"
 
     lines = [
-        f"📊 <b>Статистика {html.escape(client['name'])}</b>\n",
-        f"Всего лидов: <b>{stats['total']}</b>",
-        f"🌿 Органика: {stats['organic']}",
-        f"🎯 Таргет: {stats['ad']}",
+        "📋 <b>Карточка публикации</b>\n",
+        f"Пост: <code>{html.escape(media_row['media_id'])}</code>",
+        f"Триггер: {trigger_label}",
     ]
+    if media_row["trigger_type"] == "keywords":
+        keywords = media_row["keywords_list"] or []
+        lines.append(f"Ключевые слова: {', '.join(keywords) if keywords else '—'}")
+    lines.append(f"Текст ответа: {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
+    lines.append(f"\nСтатус: {status_label}")
 
-    if recent:
-        lines.append("\n<b>Последние лиды:</b>")
-        for lead in recent:
-            source = "🎯" if lead["post_type"] == "ad" else "🌿"
-            phone = lead["phone_number"] or "—"
-            status_label = STATUS_LABELS.get(lead["status"], lead["status"])
-            username = html.escape(lead["ig_username"]) if lead["ig_username"] else "?"
-            lines.append(
-                f"{source} @{username} — {status_label}, тел: {phone} — {lead['created_at']:%d.%m %H:%M}"
-            )
-
-    keyboard_rows: list[list[InlineKeyboardButton]] = []
-    keyboard_rows.append([
-        InlineKeyboardButton(text="➕ Включить защиту на видео/пост", callback_data=AddMediaCallback().pack())
+    toggle_text = "⏸ Остановить" if media_row["is_active"] else "🚀 ЗАПУСТИТЬ ЗАЩИТУ"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=toggle_text,
+            callback_data=ToggleMediaActiveCallback(media_id=media_row["media_id"]).pack(),
+        )],
+        [InlineKeyboardButton(
+            text="❌ Удалить пост из панели",
+            callback_data=DeleteMediaCallback(media_id=media_row["media_id"]).pack(),
+        )],
     ])
-    if client["google_sheet_id"]:
-        keyboard_rows.append([
-            InlineKeyboardButton(
-                text="📊 Готовые к покупке (таблица)",
-                url=f"https://docs.google.com/spreadsheets/d/{client['google_sheet_id']}/edit",
-            )
-        ])
-
-    keyboard_rows.append([
-        InlineKeyboardButton(text="⚙️ Настроить Direct-ответ", callback_data=EditDirectTextCallback().pack())
-    ])
-    keyboard_rows.append([
-        InlineKeyboardButton(text="🙏 Настроить Thank-you текст", callback_data=EditThankYouTextCallback().pack())
-    ])
-    keyboard_rows.append([
-        InlineKeyboardButton(text="🔄 Обновить", callback_data=RefreshStatsCallback().pack())
-    ])
-
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+    return "\n".join(lines), keyboard
 
 
 @router.message(Command("mystats"))
@@ -110,7 +96,7 @@ async def my_stats_handler(message: Message, db: Database) -> None:
     if message.from_user is None:
         return
 
-    view = await _build_mystats_view(db, message.from_user.id)
+    view = await build_manager_home_view(db, message.from_user.id)
     if view is None:
         await message.answer(
             "Эта команда для менеджеров подключённых аккаунтов. "
@@ -127,7 +113,7 @@ async def refresh_stats_handler(callback: CallbackQuery, db: Database) -> None:
     if callback.from_user is None:
         return
 
-    view = await _build_mystats_view(db, callback.from_user.id)
+    view = await build_manager_home_view(db, callback.from_user.id)
     if view is None:
         await callback.answer("Доступ утерян", show_alert=True)
         return
@@ -166,8 +152,9 @@ async def edit_direct_text_handler(callback: CallbackQuery, state: FSMContext, d
     StateFilter(
         DirectTextStates.waiting_for_text,
         DirectTextStates.waiting_for_thank_you_text,
-        MediaStates.waiting_for_media_link,
-        MediaStates.waiting_for_media_text,
+        MediaWizardStates.waiting_for_media_link,
+        MediaWizardStates.waiting_for_keywords,
+        MediaWizardStates.waiting_for_reply_text,
     ),
     Command("cancel"),
 )
@@ -258,17 +245,16 @@ async def add_media_handler(callback: CallbackQuery, state: FSMContext, db: Data
         await callback.answer("Доступ утерян", show_alert=True)
         return
 
-    await state.set_state(MediaStates.waiting_for_media_link)
+    await state.set_state(MediaWizardStates.waiting_for_media_link)
     await callback.message.answer(
-        "🔗 Пришли ссылку на пост/видео/рекламный креатив в Instagram "
+        "🔗 <b>Шаг 1/3.</b> Пришли ссылку на пост/видео/рекламный креатив в Instagram "
         "(например, https://www.instagram.com/p/XXXXXXXXXXX/) или прямой media_id.\n\n"
-        "Бот будет обрабатывать комментарии ТОЛЬКО под этой публикацией.\n\n"
         "Для отмены — /cancel"
     )
     await callback.answer()
 
 
-@router.message(MediaStates.waiting_for_media_link)
+@router.message(MediaWizardStates.waiting_for_media_link)
 async def receive_media_link_handler(
     message: Message,
     state: FSMContext,
@@ -304,50 +290,75 @@ async def receive_media_link_handler(
     await state.clear()
 
     if not added:
-        await message.answer("⚠️ Эта публикация уже под защитой другого аккаунта.")
+        await message.answer("⚠️ Этот пост уже добавлен на другом аккаунте.")
         return
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
-            text="⚙️ Настроить кастомный текст для этого видео",
-            callback_data=EditMediaTextCallback(media_id=media_id).pack(),
+            text="⚙️ Настроить условия",
+            callback_data=ConfigureTriggerCallback(media_id=media_id).pack(),
         )
     ]])
     await message.answer(
-        f"✅ Публикация поставлена под защиту LeadArmor (media_id=<code>{html.escape(media_id)}</code>).\n"
-        "Комментарии с триггер-словами под ней теперь будут перехватываться.",
+        f"✅ Пост добавлен (media_id=<code>{html.escape(media_id)}</code>).\n"
+        "Дальше — на какие комментарии реагировать.",
         reply_markup=keyboard,
     )
 
 
-@router.callback_query(EditMediaTextCallback.filter())
-async def edit_media_text_handler(
-    callback: CallbackQuery, callback_data: EditMediaTextCallback, state: FSMContext
+@router.callback_query(ConfigureTriggerCallback.filter())
+async def configure_trigger_handler(callback: CallbackQuery, callback_data: ConfigureTriggerCallback) -> None:
+    if callback.from_user is None:
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="💬 Отвечать на все комменты",
+            callback_data=SetTriggerTypeCallback(media_id=callback_data.media_id, trigger_type="all_comments").pack(),
+        )],
+        [InlineKeyboardButton(
+            text="🔑 Только на ключевые слова",
+            callback_data=SetTriggerTypeCallback(media_id=callback_data.media_id, trigger_type="keywords").pack(),
+        )],
+    ])
+    await callback.message.answer("⚙️ <b>Шаг 2/3.</b> На какие комментарии реагировать?", reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(SetTriggerTypeCallback.filter())
+async def set_trigger_type_handler(
+    callback: CallbackQuery, callback_data: SetTriggerTypeCallback, state: FSMContext, db: Database
 ) -> None:
     if callback.from_user is None:
         return
 
-    await state.update_data(media_id=callback_data.media_id)
-    await state.set_state(MediaStates.waiting_for_media_text)
+    if callback_data.trigger_type == "all_comments":
+        ok = await db.set_media_trigger(callback.from_user.id, callback_data.media_id, "all_comments", [])
+        if not ok:
+            await callback.answer("Доступ утерян", show_alert=True)
+            return
+        await callback.answer()
+        await _prompt_reply_text_step(callback.message, callback_data.media_id)
+        return
 
+    await state.update_data(media_id=callback_data.media_id)
+    await state.set_state(MediaWizardStates.waiting_for_keywords)
     await callback.message.answer(
-        "✏️ Пришли текст private reply именно для этой публикации — он перекроет общий "
-        "Direct-ответ клиента, но только под этим постом. Тег <code>{username}</code> "
-        "обязателен, как и в общем Direct-ответе.\n\n"
+        "Пришли ключевые слова через запятую (например: цена, купить, +, сколько).\n\n"
         "Для отмены — /cancel"
     )
     await callback.answer()
 
 
-@router.message(MediaStates.waiting_for_media_text)
-async def receive_media_text_handler(message: Message, state: FSMContext, db: Database) -> None:
+@router.message(MediaWizardStates.waiting_for_keywords)
+async def receive_keywords_handler(message: Message, state: FSMContext, db: Database) -> None:
     if message.from_user is None:
         return
 
-    new_text = (message.text or "").strip()
-    if "{username}" not in new_text:
+    keywords = [word.strip() for word in (message.text or "").split(",") if word.strip()]
+    if not keywords:
         await message.answer(
-            "⚠️ В тексте должен быть тег <code>{username}</code>. Пришли текст ещё раз или /cancel для отмены."
+            "⚠️ Пришли хотя бы одно ключевое слово через запятую, или /cancel для отмены."
         )
         return
 
@@ -358,13 +369,128 @@ async def receive_media_text_handler(message: Message, state: FSMContext, db: Da
         await message.answer("Что-то пошло не так, начни заново через кнопку.")
         return
 
-    updated = await db.set_media_custom_text(message.from_user.id, media_id, new_text)
+    ok = await db.set_media_trigger(message.from_user.id, media_id, "keywords", keywords)
     await state.clear()
 
-    if not updated:
+    if not ok:
         await message.answer("Доступ утерян, изменения не сохранены.")
         return
 
-    await message.answer(
-        "Muvaffaqiyatli! Кастомный текст для этой публикации сохранён! 🚀🛡️"
+    await _prompt_reply_text_step(message, media_id)
+
+
+async def _prompt_reply_text_step(message: Message, media_id: str) -> None:
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="📝 Текст ответа",
+            callback_data=ConfigureReplyTextCallback(media_id=media_id).pack(),
+        )
+    ]])
+    await message.answer("Условия сохранены. Дальше — текст ответа в Директ.", reply_markup=keyboard)
+
+
+@router.callback_query(ConfigureReplyTextCallback.filter())
+async def configure_reply_text_handler(
+    callback: CallbackQuery, callback_data: ConfigureReplyTextCallback, state: FSMContext
+) -> None:
+    if callback.from_user is None:
+        return
+
+    await state.update_data(media_id=callback_data.media_id)
+    await state.set_state(MediaWizardStates.waiting_for_reply_text)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="Пропустить (использовать текст по умолчанию)",
+            callback_data=SkipReplyTextCallback(media_id=callback_data.media_id).pack(),
+        )
+    ]])
+    await callback.message.answer(
+        "📝 <b>Шаг 3/3.</b> Пришли текст, который бот отправит в Директ под этим постом. "
+        "Тег <code>{username}</code> подставит имя клиента из Instagram.\n\n"
+        "Для отмены — /cancel",
+        reply_markup=keyboard,
     )
+    await callback.answer()
+
+
+@router.callback_query(SkipReplyTextCallback.filter())
+async def skip_reply_text_handler(callback: CallbackQuery, callback_data: SkipReplyTextCallback, state: FSMContext, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    await state.clear()
+    await _show_media_card(callback.message, db, callback_data.media_id)
+    await callback.answer()
+
+
+@router.message(MediaWizardStates.waiting_for_reply_text)
+async def receive_reply_text_handler(message: Message, state: FSMContext, db: Database) -> None:
+    if message.from_user is None:
+        return
+
+    new_text = (message.text or "").strip()
+    if not new_text:
+        await message.answer("Текст не может быть пустым. Пришли текст ещё раз или /cancel для отмены.")
+        return
+
+    data = await state.get_data()
+    media_id = data.get("media_id")
+    if not media_id:
+        await state.clear()
+        await message.answer("Что-то пошло не так, начни заново через кнопку.")
+        return
+
+    ok = await db.set_media_reply_text(message.from_user.id, media_id, new_text)
+    await state.clear()
+
+    if not ok:
+        await message.answer("Доступ утерян, изменения не сохранены.")
+        return
+
+    await _show_media_card(message, db, media_id)
+
+
+async def _show_media_card(message: Message, db: Database, media_id: str) -> None:
+    media_row = await db.get_monitored_media(media_id)
+    if media_row is None:
+        await message.answer("Пост не найден — возможно, был удалён.")
+        return
+    text, keyboard = _build_media_card(media_row)
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(ToggleMediaActiveCallback.filter())
+async def toggle_media_active_handler(
+    callback: CallbackQuery, callback_data: ToggleMediaActiveCallback, db: Database
+) -> None:
+    if callback.from_user is None:
+        return
+
+    current = await db.get_monitored_media(callback_data.media_id)
+    if current is None:
+        await callback.answer("Пост не найден", show_alert=True)
+        return
+
+    updated = await db.set_media_active(callback.from_user.id, callback_data.media_id, not current["is_active"])
+    if updated is None:
+        await callback.answer("Доступ утерян", show_alert=True)
+        return
+
+    text, keyboard = _build_media_card(updated)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer("Запущено 🚀" if updated["is_active"] else "Остановлено ⏸")
+
+
+@router.callback_query(DeleteMediaCallback.filter())
+async def delete_media_handler(callback: CallbackQuery, callback_data: DeleteMediaCallback, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    deleted = await db.delete_monitored_media(callback.from_user.id, callback_data.media_id)
+    if not deleted:
+        await callback.answer("Доступ утерян или пост уже удалён", show_alert=True)
+        return
+
+    await callback.message.edit_text("🗑 Пост удалён из панели, бот больше не следит за его комментариями.")
+    await callback.answer("Удалено")
