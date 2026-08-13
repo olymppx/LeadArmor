@@ -302,11 +302,21 @@ async def receive_media_link_handler(
         )
         return
 
-    added = await db.add_media_to_monitor(client["ig_business_id"], media_id)
+    status = await db.add_media_to_monitor(client["ig_business_id"], media_id)
     await state.clear()
 
-    if not added:
+    if status == "conflict":
         await message.answer("⚠️ Этот пост уже добавлен на другом аккаунте.")
+        return
+
+    if status == "exists":
+        # Пост уже был добавлен раньше — показываем ЕГО ТЕКУЩУЮ карточку,
+        # а не гоним по мастеру заново (это стирало сохранённые условия/текст).
+        await message.answer(
+            f"ℹ️ Этот пост уже добавлен (media_id=<code>{html.escape(media_id)}</code>). "
+            "Вот его текущая настройка:"
+        )
+        await _show_media_card(message, db, media_id)
         return
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -469,6 +479,16 @@ async def receive_reply_text_handler(message: Message, state: FSMContext, db: Da
     await _show_media_card(message, db, media_id)
 
 
+async def _send_home_nudge(message: Message, db: Database) -> None:
+    # После карточки поста легко потерять остальные фичи (статистика, Direct/
+    # Thank-you тексты, ссылка на Sheets) — они были доступны только через
+    # /mystats, о которой надо вспомнить. Подсовываем их обратно сразу же.
+    home_view = await build_manager_home_view(db, message.chat.id)
+    if home_view is not None:
+        home_text, home_keyboard = home_view
+        await message.answer(home_text, reply_markup=home_keyboard)
+
+
 async def _show_media_card(message: Message, db: Database, media_id: str) -> None:
     media_row = await db.get_monitored_media(media_id)
     if media_row is None:
@@ -476,6 +496,7 @@ async def _show_media_card(message: Message, db: Database, media_id: str) -> Non
         return
     text, keyboard = _build_media_card(media_row)
     await message.answer(text, reply_markup=keyboard)
+    await _send_home_nudge(message, db)
 
 
 @router.callback_query(ToggleMediaActiveCallback.filter())
@@ -498,6 +519,8 @@ async def toggle_media_active_handler(
     text, keyboard = _build_media_card(updated)
     await callback.message.edit_text(text, reply_markup=keyboard)
     await _safe_answer(callback, "Запущено 🚀" if updated["is_active"] else "Остановлено ⏸")
+    if updated["is_active"]:
+        await _send_home_nudge(callback.message, db)
 
 
 @router.callback_query(DeleteMediaCallback.filter())
@@ -512,3 +535,4 @@ async def delete_media_handler(callback: CallbackQuery, callback_data: DeleteMed
 
     await callback.message.edit_text("🗑 Пост удалён из панели, бот больше не следит за его комментариями.")
     await _safe_answer(callback, "Удалено")
+    await _send_home_nudge(callback.message, db)

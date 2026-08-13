@@ -297,7 +297,11 @@ class Database:
                 media_id,
             )
 
-    async def add_media_to_monitor(self, ig_business_id: str, media_id: str) -> bool:
+    async def add_media_to_monitor(self, ig_business_id: str, media_id: str) -> str:
+        """Возвращает 'created' (новая запись), 'exists' (уже добавлен этим же
+        аккаунтом ранее — настройки трогать нельзя) или 'conflict' (занят другим
+        аккаунтом). Раньше вызывающий код не мог отличить 'created' от 'exists'
+        и всегда гнал по мастеру заново, затирая уже сохранённые условия/текст."""
         assert self.pool is not None
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -312,15 +316,12 @@ class Database:
                 settings.LEAD_KEYWORDS,  # стартовые ключевые слова — можно перенастроить на Шаге 2
             )
             if row is not None:
-                return True
+                return "created"
 
-            # media_id уже занят — считаем успехом только если тем же аккаунтом
-            # (идемпотентное повторное добавление/резюме мастера настройки), а не
-            # чужим (Meta media_id уникальны глобально, лишняя защита от кросс-тенантной путаницы не помешает).
             owner = await conn.fetchval(
                 "SELECT ig_business_id FROM monitored_media WHERE media_id = $1", media_id
             )
-            return owner == ig_business_id
+            return "exists" if owner == ig_business_id else "conflict"
 
     async def set_media_trigger(
         self, manager_chat_id: int, media_id: str, trigger_type: str, keywords_list: list[str]
