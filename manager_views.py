@@ -27,14 +27,6 @@ class RefreshStatsCallback(CallbackData, prefix="mystats_refresh"):
     pass
 
 
-class EditDirectTextCallback(CallbackData, prefix="edit_direct_text"):
-    pass
-
-
-class EditThankYouTextCallback(CallbackData, prefix="edit_thank_you_text"):
-    pass
-
-
 class AddMediaCallback(CallbackData, prefix="add_media"):
     pass
 
@@ -98,12 +90,6 @@ async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[s
             )
         ])
 
-    keyboard_rows.append([
-        InlineKeyboardButton(text="⚙️ Настроить Direct-ответ", callback_data=EditDirectTextCallback().pack())
-    ])
-    keyboard_rows.append([
-        InlineKeyboardButton(text="🙏 Настроить Thank-you текст", callback_data=EditThankYouTextCallback().pack())
-    ])
     keyboard_rows.append([
         InlineKeyboardButton(text="🔄 Обновить", callback_data=RefreshStatsCallback().pack())
     ])

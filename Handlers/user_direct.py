@@ -98,7 +98,7 @@ async def process_direct_message(
         status=updated_lead["status"],
     )
 
-    thank_you_text = resolve_thank_you_text(updated_lead["custom_thank_you_text"], updated_lead["ig_username"])
+    thank_you_text = resolve_thank_you_text(updated_lead["thank_you_text"], updated_lead["ig_username"])
     logger.info("Резолвленный thank-you текст для client_id=%s: %r", updated_lead["client_id"], thank_you_text)
     await send_thank_you_message(
         session=session,

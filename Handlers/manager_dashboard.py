@@ -12,12 +12,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from API.meta_api import THANK_YOU_TEXT, build_private_reply_text, resolve_owned_media_id
+from API.meta_api import THANK_YOU_TEXT, resolve_owned_media_id
 from DB.database import Database
 from manager_views import (
     AddMediaCallback,
-    EditDirectTextCallback,
-    EditThankYouTextCallback,
     ListMediaCallback,
     RefreshStatsCallback,
     build_manager_home_view,
@@ -40,15 +38,11 @@ async def _safe_answer(callback: CallbackQuery, *args, **kwargs) -> None:
         logger.warning("callback.answer() не прошёл (устаревший callback_query) — игнорируем")
 
 
-class DirectTextStates(StatesGroup):
-    waiting_for_text = State()
-    waiting_for_thank_you_text = State()
-
-
 class MediaWizardStates(StatesGroup):
     waiting_for_media_link = State()
     waiting_for_keywords = State()
     waiting_for_reply_text = State()
+    waiting_for_thank_you_text = State()
 
 
 class ConfigureTriggerCallback(CallbackData, prefix="cfg_trigger"):
@@ -65,6 +59,10 @@ class ConfigureReplyTextCallback(CallbackData, prefix="cfg_reply_text"):
 
 
 class SkipReplyTextCallback(CallbackData, prefix="skip_reply_text"):
+    media_id: str
+
+
+class ConfigureMediaThankYouCallback(CallbackData, prefix="cfg_media_thanks"):
     media_id: str
 
 
@@ -104,6 +102,7 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
         keywords = media_row["keywords_list"] or []
         lines.append(f"Ключевые слова: {', '.join(keywords) if keywords else '—'}")
     lines.append(f"Текст ответа: {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
+    lines.append(f"Thank-you текст: {'настроен ✏️' if media_row['thank_you_text'] else 'по умолчанию'}")
     lines.append(f"\nСтатус: {status_label}")
 
     toggle_text = "⏸ Остановить чат бот" if media_row["is_active"] else "🚀 Запустить чат бот"
@@ -111,6 +110,14 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(
             text=toggle_text,
             callback_data=ToggleMediaActiveCallback(media_id=media_row["media_id"]).pack(),
+        )],
+        [InlineKeyboardButton(
+            text="📝 Текст ответа",
+            callback_data=ConfigureReplyTextCallback(media_id=media_row["media_id"]).pack(),
+        )],
+        [InlineKeyboardButton(
+            text="🙏 Thank-you текст",
+            callback_data=ConfigureMediaThankYouCallback(media_id=media_row["media_id"]).pack(),
         )],
         [InlineKeyboardButton(
             text="❌ Удалить пост из панели",
@@ -152,116 +159,18 @@ async def refresh_stats_handler(callback: CallbackQuery, db: Database) -> None:
     await _safe_answer(callback, "Обновлено")
 
 
-@router.callback_query(EditDirectTextCallback.filter())
-async def edit_direct_text_handler(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
-    if callback.from_user is None:
-        return
-
-    client = await db.get_client_by_manager_chat_id(callback.from_user.id)
-    if client is None:
-        await _safe_answer(callback, "Доступ утерян", show_alert=True)
-        return
-
-    current_text = client["custom_direct_text"] or build_private_reply_text(None)
-
-    await state.update_data(ig_business_id=client["ig_business_id"])
-    await state.set_state(DirectTextStates.waiting_for_text)
-
-    await callback.message.answer(
-        "✏️ <b>Текущий текст Direct-ответа:</b>\n\n"
-        f"<code>{html.escape(current_text)}</code>\n\n"
-        "Пришли новый текст. Обязательно включи тег <code>{username}</code> — "
-        "на его место подставится имя клиента из Instagram.\n\n"
-        "Для отмены — /cancel"
-    )
-    await _safe_answer(callback)
-
-
 @router.message(
     StateFilter(
-        DirectTextStates.waiting_for_text,
-        DirectTextStates.waiting_for_thank_you_text,
         MediaWizardStates.waiting_for_media_link,
         MediaWizardStates.waiting_for_keywords,
         MediaWizardStates.waiting_for_reply_text,
+        MediaWizardStates.waiting_for_thank_you_text,
     ),
     Command("cancel"),
 )
-async def cancel_direct_text_handler(message: Message, state: FSMContext) -> None:
+async def cancel_media_wizard_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Отменено, текст не изменён.")
-
-
-@router.message(DirectTextStates.waiting_for_text)
-async def receive_direct_text_handler(message: Message, state: FSMContext, db: Database) -> None:
-    if message.from_user is None:
-        return
-
-    new_text = (message.text or "").strip()
-
-    if "{username}" not in new_text:
-        await message.answer(
-            "⚠️ В тексте должен быть тег <code>{username}</code> — без него бот не сможет "
-            "подставить имя клиента. Пришли текст ещё раз или /cancel для отмены."
-        )
-        return
-
-    updated = await db.update_custom_direct_text(message.from_user.id, new_text)
-    await state.clear()
-
-    if not updated:
-        await message.answer("Доступ утерян, изменения не сохранены.")
-        return
-
-    await message.answer(
-        "Muvaffaqiyatli! Янги Direct-матни лазерным бетоном запечатан в базу данных! 🚀🛡️"
-    )
-
-
-@router.callback_query(EditThankYouTextCallback.filter())
-async def edit_thank_you_text_handler(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
-    if callback.from_user is None:
-        return
-
-    client = await db.get_client_by_manager_chat_id(callback.from_user.id)
-    if client is None:
-        await _safe_answer(callback, "Доступ утерян", show_alert=True)
-        return
-
-    current_text = client["custom_thank_you_text"] or THANK_YOU_TEXT
-
-    await state.set_state(DirectTextStates.waiting_for_thank_you_text)
-
-    await callback.message.answer(
-        "✏️ <b>Текущий Thank-you текст (после получения номера):</b>\n\n"
-        f"<code>{html.escape(current_text)}</code>\n\n"
-        "Пришли новый текст. Тег <code>{username}</code> необязателен — можно "
-        "написать просто текст без имени клиента.\n\n"
-        "Для отмены — /cancel"
-    )
-    await _safe_answer(callback)
-
-
-@router.message(DirectTextStates.waiting_for_thank_you_text)
-async def receive_thank_you_text_handler(message: Message, state: FSMContext, db: Database) -> None:
-    if message.from_user is None:
-        return
-
-    new_text = (message.text or "").strip()
-    if not new_text:
-        await message.answer("Текст не может быть пустым. Пришли текст ещё раз или /cancel для отмены.")
-        return
-
-    updated = await db.update_custom_thank_you_text(message.from_user.id, new_text)
-    await state.clear()
-
-    if not updated:
-        await message.answer("Доступ утерян, изменения не сохранены.")
-        return
-
-    await message.answer(
-        "Muvaffaqiyatli! Янги Thank-you матни лазерным бетоном запечатан в базу данных! 🚀🛡️"
-    )
+    await message.answer("Отменено, изменения не сохранены.")
 
 
 @router.callback_query(ListMediaCallback.filter())
@@ -557,6 +466,59 @@ async def receive_reply_text_handler(message: Message, state: FSMContext, db: Da
         return
 
     ok = await db.set_media_reply_text(message.from_user.id, media_id, new_text)
+    await state.clear()
+
+    if not ok:
+        await message.answer("Доступ утерян, изменения не сохранены.")
+        return
+
+    await _show_media_card(message, db, media_id)
+
+
+@router.callback_query(ConfigureMediaThankYouCallback.filter())
+async def configure_media_thank_you_handler(
+    callback: CallbackQuery, callback_data: ConfigureMediaThankYouCallback, state: FSMContext, db: Database
+) -> None:
+    if callback.from_user is None:
+        return
+
+    media_row = await db.get_monitored_media(callback_data.media_id)
+    if media_row is None:
+        await _safe_answer(callback, "Пост не найден", show_alert=True)
+        return
+
+    current_text = media_row["thank_you_text"] or THANK_YOU_TEXT
+
+    await state.update_data(media_id=callback_data.media_id)
+    await state.set_state(MediaWizardStates.waiting_for_thank_you_text)
+
+    await callback.message.answer(
+        "✏️ <b>Текущий Thank-you текст этого поста (после получения номера):</b>\n\n"
+        f"<code>{html.escape(current_text)}</code>\n\n"
+        "Пришли новый текст. Тег <code>{username}</code> необязателен.\n\n"
+        "Для отмены — /cancel"
+    )
+    await _safe_answer(callback)
+
+
+@router.message(MediaWizardStates.waiting_for_thank_you_text)
+async def receive_media_thank_you_handler(message: Message, state: FSMContext, db: Database) -> None:
+    if message.from_user is None:
+        return
+
+    new_text = (message.text or "").strip()
+    if not new_text:
+        await message.answer("Текст не может быть пустым. Пришли текст ещё раз или /cancel для отмены.")
+        return
+
+    data = await state.get_data()
+    media_id = data.get("media_id")
+    if not media_id:
+        await state.clear()
+        await message.answer("Что-то пошло не так, начни заново через кнопку.")
+        return
+
+    ok = await db.set_media_thank_you_text(message.from_user.id, media_id, new_text)
     await state.clear()
 
     if not ok:
