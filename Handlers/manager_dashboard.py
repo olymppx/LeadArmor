@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from API.meta_api import THANK_YOU_TEXT, resolve_owned_media_id
+from API.meta_api import THANK_YOU_TEXT, fetch_media_title, resolve_owned_media_id
 from DB.database import Database
 from manager_views import (
     AddMediaCallback,
@@ -87,6 +87,16 @@ TRIGGER_LABELS = {"all_comments": "Все комментарии", "keywords": "
 POST_TYPE_LABELS = {"organic": "🌿 Всегда органика", "ad": "🎯 Всегда таргет", None: "🤖 Авто (по Meta)"}
 
 
+def _media_display_name(media_row, max_len: int = 40) -> str:
+    # В списке/карточке показываем подпись поста, а не голый media_id —
+    # список из чисел вида 180721940... ничего не говорит владельцу.
+    title = media_row["title"]
+    if not title:
+        return media_row["media_id"]
+    title = title.replace("\n", " ").strip()
+    return title if len(title) <= max_len else title[:max_len - 1] + "…"
+
+
 def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     trigger_label = TRIGGER_LABELS.get(media_row["trigger_type"], media_row["trigger_type"])
     status_label = "🟢 Активен" if media_row["is_active"] else "🔴 Выключен"
@@ -94,6 +104,7 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
 
     lines = [
         "📋 <b>Карточка публикации</b>\n",
+        f"<b>Название:</b> {html.escape(_media_display_name(media_row, max_len=80))}",
         f"<b>Пост:</b> <code>{html.escape(media_row['media_id'])}</code>",
         f"<b>Тип поста:</b> {post_type_label}",
         f"<b>Триггер:</b> {trigger_label}",
@@ -194,7 +205,7 @@ async def list_media_handler(callback: CallbackQuery, db: Database) -> None:
         status_dot = "🟢" if media_row["is_active"] else "🔴"
         trigger_label = TRIGGER_LABELS.get(media_row["trigger_type"], media_row["trigger_type"])
         keyboard_rows.append([InlineKeyboardButton(
-            text=f"{status_dot} {media_row['media_id']} — {trigger_label}",
+            text=f"{status_dot} {_media_display_name(media_row)} — {trigger_label}",
             callback_data=OpenMediaCallback(media_id=media_row["media_id"]).pack(),
         )])
 
@@ -265,7 +276,8 @@ async def receive_media_link_handler(
         )
         return
 
-    status = await db.add_media_to_monitor(client["ig_business_id"], media_id)
+    title = await fetch_media_title(http_session, media_id, client["page_access_token"])
+    status = await db.add_media_to_monitor(client["ig_business_id"], media_id, title=title)
     await state.clear()
 
     if status == "conflict":
@@ -296,8 +308,9 @@ async def receive_media_link_handler(
             callback_data=SetPostTypeOverrideCallback(media_id=media_id, value="ad").pack(),
         )],
     ])
+    added_label = html.escape(title) if title else f"media_id=<code>{html.escape(media_id)}</code>"
     await message.answer(
-        f"✅ Пост добавлен (media_id=<code>{html.escape(media_id)}</code>).\n\n"
+        f"✅ Пост добавлен: {added_label}\n\n"
         "🎯 <b>Шаг 2/4.</b> Тип поста для этой публикации. Meta сама определяет "
         "органику/таргет по каждому комментарию — обычно этого достаточно. "
         "Выбери вручную, только если Meta ошибается именно на этом посте.",

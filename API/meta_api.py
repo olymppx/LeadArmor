@@ -58,6 +58,19 @@ def verify_signature(
 def classify_post_type(media_type: str | None) -> str:
     return  'ad' if media_type == 'AD' else 'organic'
 
+async def fetch_media_title(session: aiohttp.ClientSession, media_id: str, access_token: str) -> str | None:
+    # Человекочитаемое название поста для списков/карточек в Telegram — без
+    # этого юзер видит только голый media_id, который ничего не говорит.
+    url = f"{GRAPH_API_BASE}/{media_id}"
+    params = {"fields": "caption", "access_token": access_token}
+    async with session.get(url, params=params) as resp:
+        data = await resp.json()
+        if resp.status != 200:
+            logger.warning("Не удалось получить caption для media_id=%s (HTTP %s): %s", media_id, resp.status, data)
+            return None
+        caption = data.get("caption")
+        return caption.strip() if caption else None
+
 async def hide_comment(session: aiohttp.ClientSession, comment_id: str, access_token : str) -> bool:
     url = f"{GRAPH_API_BASE}/{comment_id}"
     params = {"hidden" : "true", "access_token" : access_token}

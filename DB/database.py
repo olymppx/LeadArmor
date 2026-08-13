@@ -109,6 +109,7 @@ ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL 
 -- Заполнено — жёсткий ручной override на случай, если Meta ошибается на конкретном посте.
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS post_type_override post_type_enum;
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS thank_you_text TEXT;
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS title TEXT;
 """
 
 
@@ -271,7 +272,7 @@ class Database:
                 media_id,
             )
 
-    async def add_media_to_monitor(self, ig_business_id: str, media_id: str) -> str:
+    async def add_media_to_monitor(self, ig_business_id: str, media_id: str, title: str | None = None) -> str:
         """Возвращает 'created' (новая запись), 'exists' (уже добавлен этим же
         аккаунтом ранее — настройки трогать нельзя) или 'conflict' (занят другим
         аккаунтом). Раньше вызывающий код не мог отличить 'created' от 'exists'
@@ -280,14 +281,15 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO monitored_media (ig_business_id, media_id, trigger_type, keywords_list, is_active)
-                VALUES ($1, $2, 'keywords', $3, FALSE)
+                INSERT INTO monitored_media (ig_business_id, media_id, trigger_type, keywords_list, is_active, title)
+                VALUES ($1, $2, 'keywords', $3, FALSE, $4)
                 ON CONFLICT (media_id) DO NOTHING
                 RETURNING id;
                 """,
                 ig_business_id,
                 media_id,
                 settings.LEAD_KEYWORDS,  # стартовые ключевые слова — можно перенастроить на Шаге 2
+                title,
             )
             if row is not None:
                 return "created"
