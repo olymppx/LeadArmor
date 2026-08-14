@@ -39,6 +39,10 @@ class ConfirmedLeadsCallback(CallbackData, prefix="confirmed_leads"):
     pass
 
 
+class BroadcastCallback(CallbackData, prefix="broadcast"):
+    pass
+
+
 async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[str, InlineKeyboardMarkup] | None:
     client = await db.get_client_by_manager_chat_id(manager_chat_id)
     if client is None:
@@ -89,6 +93,9 @@ async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[s
     keyboard_rows: list[list[InlineKeyboardButton]] = []
     keyboard_rows.append([
         InlineKeyboardButton(text="📞 Кто оставил номер", callback_data=ConfirmedLeadsCallback().pack())
+    ])
+    keyboard_rows.append([
+        InlineKeyboardButton(text="📤 Рассылка", callback_data=BroadcastCallback().pack())
     ])
     keyboard_rows.append([
         InlineKeyboardButton(text="➕ Добавить пост", callback_data=AddMediaCallback().pack())

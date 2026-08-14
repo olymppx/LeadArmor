@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 
@@ -12,15 +13,24 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from API.meta_api import THANK_YOU_TEXT, build_private_reply_text, fetch_media_title, resolve_owned_media_id
+from API.meta_api import (
+    THANK_YOU_TEXT,
+    build_private_reply_text,
+    fetch_media_title,
+    resolve_owned_media_id,
+    send_direct_message,
+)
 from DB.database import Database
 from manager_views import (
     AddMediaCallback,
+    BroadcastCallback,
     ConfirmedLeadsCallback,
     ListMediaCallback,
     RefreshStatsCallback,
     build_manager_home_view,
 )
+
+BROADCAST_WINDOW_HOURS = 24
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +54,18 @@ class MediaWizardStates(StatesGroup):
     waiting_for_keywords = State()
     waiting_for_reply_text = State()
     waiting_for_thank_you_text = State()
+
+
+class BroadcastStates(StatesGroup):
+    waiting_for_text = State()
+
+
+class ConfirmBroadcastCallback(CallbackData, prefix="confirm_broadcast"):
+    pass
+
+
+class CancelBroadcastCallback(CallbackData, prefix="cancel_broadcast"):
+    pass
 
 
 class ConfigureTriggerCallback(CallbackData, prefix="cfg_trigger"):
@@ -210,6 +232,7 @@ async def refresh_stats_handler(callback: CallbackQuery, db: Database) -> None:
         MediaWizardStates.waiting_for_keywords,
         MediaWizardStates.waiting_for_reply_text,
         MediaWizardStates.waiting_for_thank_you_text,
+        BroadcastStates.waiting_for_text,
     ),
     Command("cancel"),
 )
@@ -287,6 +310,113 @@ async def confirmed_leads_handler(callback: CallbackQuery, db: Database) -> None
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
     )
     await _safe_answer(callback)
+
+
+@router.callback_query(BroadcastCallback.filter())
+async def broadcast_handler(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    client = await db.get_client_by_manager_chat_id(callback.from_user.id)
+    if client is None:
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
+        return
+
+    leads = await db.get_broadcastable_leads(callback.from_user.id, BROADCAST_WINDOW_HOURS)
+    if not leads:
+        await callback.message.answer(
+            f"📤 Сейчас некому писать — Meta разрешает бизнесу отвечать в Директ только в течение "
+            f"{BROADCAST_WINDOW_HOURS} часов после последнего сообщения клиента. Никто не оставлял "
+            f"номер за последние {BROADCAST_WINDOW_HOURS}ч."
+        )
+        await _safe_answer(callback)
+        return
+
+    await state.set_state(BroadcastStates.waiting_for_text)
+    await callback.message.answer(
+        f"📤 <b>Рассылка.</b> Сейчас доступно <b>{len(leads)}</b> получателей "
+        f"(оставили номер за последние {BROADCAST_WINDOW_HOURS}ч — это ограничение Meta, не наше).\n\n"
+        "Пришли текст сообщения. Тег <code>{username}</code> подставит имя клиента.\n\n"
+        "Для отмены — /cancel"
+    )
+    await _safe_answer(callback)
+
+
+@router.message(BroadcastStates.waiting_for_text)
+async def receive_broadcast_text_handler(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Текст не может быть пустым. Пришли текст ещё раз или /cancel для отмены.")
+        return
+
+    await state.update_data(broadcast_text=text)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отправить", callback_data=ConfirmBroadcastCallback().pack())],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=CancelBroadcastCallback().pack())],
+    ])
+    await message.answer(
+        f"Проверь перед отправкой:\n\n<code>{html.escape(text)}</code>\n\nОтправить?",
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(CancelBroadcastCallback.filter())
+async def cancel_broadcast_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text("Рассылка отменена, ничего не отправлено.")
+    await _safe_answer(callback)
+
+
+@router.callback_query(ConfirmBroadcastCallback.filter())
+async def confirm_broadcast_handler(
+    callback: CallbackQuery, state: FSMContext, db: Database, http_session: aiohttp.ClientSession
+) -> None:
+    if callback.from_user is None:
+        return
+
+    data = await state.get_data()
+    broadcast_text = data.get("broadcast_text")
+    await state.clear()
+
+    if not broadcast_text:
+        await _safe_answer(callback, "Текст потерян, начни заново", show_alert=True)
+        return
+
+    # Список получателей запрашиваем заново прямо перед отправкой — окно в 24ч
+    # могло сдвинуться, пока владелец печатал текст и жал кнопки.
+    leads = await db.get_broadcastable_leads(callback.from_user.id, BROADCAST_WINDOW_HOURS)
+    if not leads:
+        await callback.message.edit_text("Пока печатали текст, окно закрылось у всех — отправлять некому.")
+        await _safe_answer(callback)
+        return
+
+    await callback.message.edit_text(f"📤 Отправляю {len(leads)} сообщений...")
+    await _safe_answer(callback)
+
+    sent, failed = 0, 0
+    for lead in leads:
+        name_part = f"@{lead['ig_username']}" if lead["ig_username"] else "mijoz"
+        personalized = broadcast_text.replace("{username}", name_part)
+        try:
+            ok = await send_direct_message(
+                session=http_session,
+                ig_business_id=lead["ig_business_id"],
+                ig_user_id=lead["ig_user_id"],
+                access_token=lead["page_access_token"],
+                message_text=personalized,
+            )
+        except Exception:
+            logger.exception("Не удалось отправить рассылку lead_id=%s", lead["id"])
+            ok = False
+        sent += 1 if ok else 0
+        failed += 0 if ok else 1
+        await asyncio.sleep(0.5)  # не долбим Graph API пачкой запросов подряд
+
+    await callback.message.answer(f"✅ Готово: доставлено {sent}, не удалось {failed} (из {len(leads)}).")
 
 
 @router.callback_query(OpenMediaCallback.filter())

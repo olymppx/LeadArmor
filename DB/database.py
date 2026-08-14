@@ -582,6 +582,29 @@ class Database:
                 limit,
             )
 
+    async def get_broadcastable_leads(self, manager_chat_id: int, window_hours: int = 24) -> list[asyncpg.Record]:
+        # Meta закрывает бизнесу возможность писать пользователю в Директ
+        # через 24 часа после его последнего сообщения (messaging window).
+        # Рассылка кому попало вне окна — прямое нарушение policy Meta и
+        # риск блокировки API у клиента, поэтому выбираем только тех, кому
+        # окно ещё открыто (по времени получения номера — их последнего сообщения).
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT leads.id, leads.ig_user_id, leads.ig_username, leads.updated_at,
+                       clients.ig_business_id, clients.page_access_token
+                FROM leads
+                JOIN clients ON clients.id = leads.client_id
+                WHERE clients.manager_chat_id = $1
+                  AND leads.status = 'phone_received'
+                  AND leads.updated_at > now() - ($2 * INTERVAL '1 hour')
+                ORDER BY leads.updated_at DESC
+                """,
+                manager_chat_id,
+                window_hours,
+            )
+
     async def save_lead_phone(
         self,
         *,
