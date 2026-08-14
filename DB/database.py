@@ -543,6 +543,24 @@ class Database:
                 limit,
             )
 
+    async def get_confirmed_leads_for_manager(self, manager_chat_id: int, limit: int = 20) -> list[asyncpg.Record]:
+        # Только те, кто реально прислал номер — отдельно от общей статистики
+        # и настроек, чтобы владелец видел готовых клиентов без лишнего шума.
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                """
+                SELECT leads.ig_username, leads.post_type, leads.phone_number, leads.updated_at
+                FROM leads
+                JOIN clients ON clients.id = leads.client_id
+                WHERE clients.manager_chat_id = $1 AND leads.status = 'phone_received'
+                ORDER BY leads.updated_at DESC
+                LIMIT $2
+                """,
+                manager_chat_id,
+                limit,
+            )
+
     async def save_lead_phone(
         self,
         *,

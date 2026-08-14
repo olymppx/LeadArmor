@@ -16,6 +16,7 @@ from API.meta_api import THANK_YOU_TEXT, build_private_reply_text, fetch_media_t
 from DB.database import Database
 from manager_views import (
     AddMediaCallback,
+    ConfirmedLeadsCallback,
     ListMediaCallback,
     RefreshStatsCallback,
     build_manager_home_view,
@@ -225,6 +226,45 @@ async def list_media_handler(callback: CallbackQuery, db: Database) -> None:
 
     await callback.message.answer(
         f"📋 <b>Все подключённые посты ({len(media_list)}):</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+    )
+    await _safe_answer(callback)
+
+
+@router.callback_query(ConfirmedLeadsCallback.filter())
+async def confirmed_leads_handler(callback: CallbackQuery, db: Database) -> None:
+    if callback.from_user is None:
+        return
+
+    client = await db.get_client_by_manager_chat_id(callback.from_user.id)
+    if client is None:
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
+        return
+
+    leads = await db.get_confirmed_leads_for_manager(callback.from_user.id, limit=20)
+    if not leads:
+        await callback.message.answer("Пока никто не оставил номер телефона.")
+        await _safe_answer(callback)
+        return
+
+    lines = [f"📞 <b>Кто оставил номер ({len(leads)}):</b>\n"]
+    for lead in leads:
+        source = "🎯" if lead["post_type"] == "ad" else "🌿"
+        username = html.escape(lead["ig_username"]) if lead["ig_username"] else "?"
+        lines.append(f"{source} @{username} — {lead['phone_number']} — {lead['updated_at']:%d.%m %H:%M}")
+
+    keyboard_rows = []
+    if client["google_sheet_id"]:
+        keyboard_rows.append([InlineKeyboardButton(
+            text="📊 Полная история в таблице",
+            url=f"https://docs.google.com/spreadsheets/d/{client['google_sheet_id']}/edit",
+        )])
+    keyboard_rows.append([
+        InlineKeyboardButton(text="🔄 Обновить", callback_data=ConfirmedLeadsCallback().pack())
+    ])
+
+    await callback.message.answer(
+        "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
     )
     await _safe_answer(callback)
