@@ -2,16 +2,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # === Хостинг ===
+    # Render/Koyeb/Fly передают порт через переменную PORT и требуют слушать
+    # именно его. Локально переменной нет — работает дефолт.
+    PORT: int = 8000
+
     # === Telegram ===
     BOT_TOKEN: str
     MANAGER_CHAT_ID: int  # Запасной ID менеджера
 
     # === PostgreSQL ===
+    # Облачные БД (Neon, Supabase, Render) выдают готовую строку подключения
+    # целиком — если она задана, части ниже не используются.
+    DATABASE_URL: str = ""
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_NAME: str = "leadarmor"
     DB_USER: str = "a1111"
-    DB_PASSWORD: str
+    DB_PASSWORD: str = ""
 
     # === Meta / Instagram Graph API ===
     META_APP_ID: str = ""
@@ -28,6 +36,8 @@ class Settings(BaseSettings):
 
     # === Google Sheets ===
     GOOGLE_SHEETS_CREDENTIALS_FILE: str = "credentials.json"
+    # Альтернатива файлу для хостинга: весь JSON-ключ одной переменной.
+    GOOGLE_SHEETS_CREDENTIALS_JSON: str = ""
     GOOGLE_SHEETS_SPREADSHEET_ID: str = ""
 
     # OAuth от личного Google-аккаунта владельца — нужен, чтобы создавать
@@ -62,6 +72,10 @@ class Settings(BaseSettings):
     # Важно: dsn с отступом в 4 пробела внутри класса Settings!
     @property
     def dsn(self) -> str:
+        if self.DATABASE_URL:
+            # asyncpg не понимает схему postgres:// — некоторые провайдеры
+            # (Neon, Heroku) выдают именно её, поэтому нормализуем.
+            return self.DATABASE_URL.replace("postgres://", "postgresql://", 1)
         return (
             f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

@@ -35,6 +35,35 @@ _oauth_client: gspread.Client | None = None
 _oauth_client_init_failed = False
 
 
+def _load_service_account_info() -> dict | None:
+    """Читает ключ service account: сперва из переменной окружения, потом с диска.
+
+    На хостинге (Render/Koyeb) файла credentials.json нет и быть не должно —
+    он в .gitignore и не попадает в репозиторий. Поэтому там содержимое
+    ключа кладётся целиком в переменную GOOGLE_SHEETS_CREDENTIALS_JSON.
+    Локально по-прежнему работает обычный файл.
+    """
+    raw_json = settings.GOOGLE_SHEETS_CREDENTIALS_JSON.strip()
+    if raw_json:
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            logger.exception("GOOGLE_SHEETS_CREDENTIALS_JSON задан, но это не валидный JSON")
+            return None
+
+    try:
+        with open(settings.GOOGLE_SHEETS_CREDENTIALS_FILE) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(
+            "Нет ни GOOGLE_SHEETS_CREDENTIALS_JSON, ни файла %s — Google Sheets отключён",
+            settings.GOOGLE_SHEETS_CREDENTIALS_FILE,
+        )
+    except Exception:
+        logger.exception("Не удалось прочитать ключ service account")
+    return None
+
+
 def _get_service_client() -> gspread.Client | None:
     global _service_client, _service_client_init_failed
     if _service_client is not None:
@@ -42,30 +71,24 @@ def _get_service_client() -> gspread.Client | None:
     if _service_client_init_failed:
         return None
 
-    try:
-        creds = ServiceAccountCredentials.from_service_account_file(
-            settings.GOOGLE_SHEETS_CREDENTIALS_FILE, scopes=SERVICE_ACCOUNT_SCOPES
-        )
-        _service_client = gspread.authorize(creds)
-        return _service_client
-    except FileNotFoundError:
-        logger.warning(
-            "Файл %s не найден — Google Sheets синхронизация отключена",
-            settings.GOOGLE_SHEETS_CREDENTIALS_FILE,
-        )
-    except Exception:
-        logger.exception("Не удалось авторизоваться service account'ом в Google Sheets")
+    info = _load_service_account_info()
+    if info is not None:
+        try:
+            creds = ServiceAccountCredentials.from_service_account_info(
+                info, scopes=SERVICE_ACCOUNT_SCOPES
+            )
+            _service_client = gspread.authorize(creds)
+            return _service_client
+        except Exception:
+            logger.exception("Не удалось авторизоваться service account'ом в Google Sheets")
 
     _service_client_init_failed = True
     return None
 
 
 def _get_service_account_email() -> str | None:
-    try:
-        with open(settings.GOOGLE_SHEETS_CREDENTIALS_FILE) as f:
-            return json.load(f).get("client_email")
-    except Exception:
-        return None
+    info = _load_service_account_info()
+    return info.get("client_email") if info else None
 
 
 def _get_oauth_client() -> gspread.Client | None:

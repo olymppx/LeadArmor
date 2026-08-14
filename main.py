@@ -43,10 +43,15 @@ async def main() -> None:
     app = create_app(db, bot, http_session)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=8000)
+    # Хостинги (Render, Koyeb, Fly) сами назначают порт через переменную PORT
+    # и ждут, что процесс будет слушать именно его — иначе деплой считается
+    # упавшим. Локально переменной нет, поэтому дефолт 8000 как раньше.
+    port = settings.PORT
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     logger.info(
-        "Webhook-сервер слушает на порту 8000 (%s)",
+        "Webhook-сервер слушает на порту %s (%s)",
+        port,
         "verify_token задан" if settings.META_VERIFY_TOKEN else "⚠️ META_VERIFY_TOKEN пуст",
     )
     logger.info(
