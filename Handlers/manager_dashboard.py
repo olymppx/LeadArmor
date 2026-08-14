@@ -70,6 +70,10 @@ class ToggleMediaActiveCallback(CallbackData, prefix="toggle_media"):
     media_id: str
 
 
+class ToggleHideCommentsCallback(CallbackData, prefix="toggle_hide"):
+    media_id: str
+
+
 class DeleteMediaCallback(CallbackData, prefix="delete_media"):
     media_id: str
 
@@ -114,9 +118,11 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(f"<b>Ключевые слова:</b> {', '.join(keywords) if keywords else '—'}")
     lines.append(f"<b>Текст ответа:</b> {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
     lines.append(f"<b>Thank-you текст:</b> {'настроен ✏️' if media_row['thank_you_text'] else 'по умолчанию'}")
+    lines.append(f"<b>Скрытие коммента под таргетом:</b> {'🙈 включено' if media_row['hide_comments'] else '👁 выключено'}")
     lines.append(f"\n<b>Статус:</b> {status_label}")
 
     toggle_text = "⏸ Остановить щит" if media_row["is_active"] else "🚀 ЗАПУСТИТЬ ЩИТ"
+    hide_toggle_text = "👁 Не скрывать коммент" if media_row["hide_comments"] else "🙈 Скрывать коммент"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=toggle_text,
@@ -129,6 +135,10 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(
             text="🙏 Thank-you текст",
             callback_data=ConfigureMediaThankYouCallback(media_id=media_row["media_id"]).pack(),
+        )],
+        [InlineKeyboardButton(
+            text=hide_toggle_text,
+            callback_data=ToggleHideCommentsCallback(media_id=media_row["media_id"]).pack(),
         )],
         [InlineKeyboardButton(
             text="❌ Удалить пост из панели",
@@ -595,6 +605,30 @@ async def toggle_media_active_handler(
     await _safe_answer(callback, "Запущено 🚀" if updated["is_active"] else "Остановлено ⏸")
     if updated["is_active"]:
         await _send_home_nudge(callback.message, db)
+
+
+@router.callback_query(ToggleHideCommentsCallback.filter())
+async def toggle_hide_comments_handler(
+    callback: CallbackQuery, callback_data: ToggleHideCommentsCallback, db: Database
+) -> None:
+    if callback.from_user is None:
+        return
+
+    current = await db.get_monitored_media(callback_data.media_id)
+    if current is None:
+        await _safe_answer(callback, "Пост не найден", show_alert=True)
+        return
+
+    updated = await db.set_media_hide_comments(
+        callback.from_user.id, callback_data.media_id, not current["hide_comments"]
+    )
+    if updated is None:
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
+        return
+
+    text, keyboard = _build_media_card(updated)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await _safe_answer(callback, "Скрытие включено 🙈" if updated["hide_comments"] else "Скрытие выключено 👁")
 
 
 @router.callback_query(DeleteMediaCallback.filter())

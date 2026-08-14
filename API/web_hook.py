@@ -155,8 +155,10 @@ async def proccess_comment(db: database.Database,
     logger.info("Новый лид #%s (%s) от @%s: %r", lead_id, post_type, ig_username, comment_text)
 
     # Комментарий скрываем ТОЛЬКО у рекламы — органику трогать нельзя,
-    # она держит вовлечённость поста, скрывать её незачем и вредно.
-    if post_type == "ad":
+    # она держит вовлечённость поста, скрывать её незачем и вредно. Плюс
+    # отдельный тумблер на карточке — владелец может выключить скрытие даже
+    # под таргетом, если сам того хочет.
+    if post_type == "ad" and media_row["hide_comments"]:
         is_hidden = await meta_api.hide_comment(session, comment_id, client["page_access_token"])
         if is_hidden:
             await db.mark_comment_removed(lead_id)

@@ -110,6 +110,10 @@ ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL 
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS post_type_override post_type_enum;
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS thank_you_text TEXT;
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS title TEXT;
+-- Раньше скрытие коммента было жёстко вшито в post_type == 'ad' — теперь
+-- отдельный тумблер на карточке. DEFAULT TRUE сохраняет прежнее поведение
+-- для всех уже существующих постов, никто ничего не теряет молча.
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS hide_comments BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- Удалено по прямому решению владельца: никаких "ИИ-агентов"/абстрактных
 -- диалогов в проекте, только жёсткий алгоритмический щит. Идемпотентный
@@ -400,6 +404,26 @@ class Database:
                 media_id,
                 manager_chat_id,
                 is_active,
+            )
+
+    async def set_media_hide_comments(
+        self, manager_chat_id: int, media_id: str, hide_comments: bool
+    ) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                UPDATE monitored_media
+                SET hide_comments = $3
+                FROM clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                RETURNING monitored_media.*;
+                """,
+                media_id,
+                manager_chat_id,
+                hide_comments,
             )
 
     async def delete_monitored_media(self, manager_chat_id: int, media_id: str) -> bool:
