@@ -130,14 +130,15 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"<b>Скрытие коммента под таргетом:</b> {hide_status_line}")
     lines.append(
         f"<b>Сохранение в Google Sheets:</b> "
-        f"{'✅ включено — лид попадёт в таблицу' if media_row['save_to_sheets'] else '🚫 выключено'}"
+        f"{'✅ включено — лид попадёт в таблицу' if media_row['save_to_sheets'] else '🔴 выключено'}"
     )
     lines.append(f"\n<b>Статус:</b> {status_label}")
 
     toggle_text = "⏸ Остановить пост" if media_row["is_active"] else "🚀 Запустить пост"
-    hide_toggle_text = "👁 Не скрывать коммент" if media_row["hide_comments"] else "🙈 Скрывать коммент"
     sheets_toggle_text = "🚫 Не сохранять в Sheets" if media_row["save_to_sheets"] else "✅ Сохранять в Sheets"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    is_organic_only = media_row["post_type_override"] == "organic"
+
+    keyboard_rows = [
         [InlineKeyboardButton(
             text=toggle_text,
             callback_data=ToggleMediaActiveCallback(media_id=media_row["media_id"]).pack(),
@@ -150,19 +151,24 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
             text="🙏 Thank-you текст",
             callback_data=ConfigureMediaThankYouCallback(media_id=media_row["media_id"]).pack(),
         )],
-        [InlineKeyboardButton(
+    ]
+    if not is_organic_only:
+        # Скрывать нечего на посте, который навсегда органика — кнопка
+        # только путает, раз она физически ни на что не влияет.
+        hide_toggle_text = "👁 Не скрывать коммент" if media_row["hide_comments"] else "🙈 Скрывать коммент"
+        keyboard_rows.append([InlineKeyboardButton(
             text=hide_toggle_text,
             callback_data=ToggleHideCommentsCallback(media_id=media_row["media_id"]).pack(),
-        )],
-        [InlineKeyboardButton(
-            text=sheets_toggle_text,
-            callback_data=ToggleSaveToSheetsCallback(media_id=media_row["media_id"]).pack(),
-        )],
-        [InlineKeyboardButton(
-            text="❌ Удалить пост из панели",
-            callback_data=DeleteMediaCallback(media_id=media_row["media_id"]).pack(),
-        )],
-    ])
+        )])
+    keyboard_rows.append([InlineKeyboardButton(
+        text=sheets_toggle_text,
+        callback_data=ToggleSaveToSheetsCallback(media_id=media_row["media_id"]).pack(),
+    )])
+    keyboard_rows.append([InlineKeyboardButton(
+        text="❌ Удалить пост из панели",
+        callback_data=DeleteMediaCallback(media_id=media_row["media_id"]).pack(),
+    )])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
     return "\n".join(lines), keyboard
 
 
