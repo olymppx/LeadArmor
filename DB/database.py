@@ -135,12 +135,18 @@ class Database:
     async def connect(self) -> None:
         self.pool = await asyncpg.create_pool(
             dsn=str(settings.dsn),
-            min_size=2,
+            min_size=1 if settings.DATABASE_URL else 2,
             max_size=10,
+            # Облачные БД на бесплатных тарифах (Neon, Supabase) засыпают после
+            # нескольких минут простоя и рвут все соединения — пул продолжит
+            # раздавать уже мёртвые, и первый же вебхук после паузы упадёт.
+            # Закрываем неактивные раньше, чем это сделает провайдер.
+            max_inactive_connection_lifetime=120.0 if settings.DATABASE_URL else 300.0,
         )
         logger.info(
-            "PostgreSQL: пул соединений создан (%s:%s/%s)",
-            settings.DB_HOST, settings.DB_PORT, settings.DB_NAME,
+            "PostgreSQL: пул соединений создан (%s)",
+            "облачная БД (DATABASE_URL)" if settings.DATABASE_URL
+            else f"{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}",
         )
 
     async def disconnect(self) -> None:
