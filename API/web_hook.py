@@ -10,7 +10,7 @@ from aiohttp import web
 from API import meta_api
 from API.google_oauth import google_oauth_callback_handler
 from API.instagram_oauth import oauth_callback_handler
-from API.legal import privacy_policy_handler
+from API.legal import data_deletion_handler, privacy_policy_handler, terms_of_service_handler
 from DB.database import Database
 from Handlers.user_direct import process_direct_message
 from config import settings
@@ -186,5 +186,7 @@ def create_app(db: Database, bot: Bot, http_session: aiohttp.ClientSession) -> w
     app.router.add_get("/oauth/instagram/callback", oauth_callback_handler)
     app.router.add_get("/oauth/google/callback", google_oauth_callback_handler)
     app.router.add_get("/legal/privacy", privacy_policy_handler)
+    app.router.add_get("/legal/terms", terms_of_service_handler)
+    app.router.add_get("/legal/data-deletion", data_deletion_handler)
 
     return app
