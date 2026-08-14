@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 
 INSTAGRAM_AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize"
 INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token"
-GRAPH_INSTAGRAM_BASE = "https://graph.instagram.com"
+# Без версии в пути GET и POST оба падают с одинаковой "Unsupported request"
+# (см. meta_api.py — там graph.instagram.com везде используется с версией).
+GRAPH_INSTAGRAM_BASE = "https://graph.instagram.com/v25.0"
 
 OAUTH_SCOPES = ",".join(settings.REQUIRED_META_PERMISSIONS)
 
@@ -83,31 +85,80 @@ async def exchange_code_for_token(session: aiohttp.ClientSession, code: str) -> 
         if not entries or "access_token" not in entries[0]:
             logger.error("Некорректный ответ при обмене code на токен: %s", payload)
             return None
-        return entries[0]
+        # Диагностика: префикс токена (не сам токен) выдаёт, какого "сорта"
+        # access_token реально пришёл, а expires_in — нужен ли вообще обмен
+        # на долгоживущий (у Instagram Login токен часто уже 60-дневный).
+        entry = entries[0]
+        logger.info(
+            "Токен получен: префикс=%s..., user_id=%s, expires_in=%s, permissions=%s",
+            entry["access_token"][:6], entry.get("user_id"),
+            entry.get("expires_in"), entry.get("permissions"),
+        )
+        return entry
 
 
-async def exchange_for_long_lived_token(session: aiohttp.ClientSession, short_lived_token: str) -> str | None:
+async def exchange_for_long_lived_token(session: aiohttp.ClientSession, short_lived_token: str) -> str:
+    """Пытается обменять токен на 60-дневный. Если Meta отказывает — возвращает
+    исходный токен, а не None.
+
+    Причина: эмпирически проверено curl'ом, что эндпоинт ig_exchange_token жив
+    и принимает GET (с мусорным токеном отвечает "Failed to decrypt"), но
+    именно на реальный токен Instagram Business Login отвечает "Unsupported
+    request". То есть Meta расшифровывает токен и отказывает конкретно ему —
+    ig_exchange_token относится к старому Basic Display API. Ронять из-за
+    этого весь онбординг нельзя: сам токен рабочий, им можно пользоваться.
+    """
     params = {
         "grant_type": "ig_exchange_token",
         "client_secret": settings.META_INSTAGRAM_APP_SECRET,
         "access_token": short_lived_token,
     }
+
     async with session.get(f"{GRAPH_INSTAGRAM_BASE}/access_token", params=params) as resp:
         payload = await resp.json(content_type=None)
-        if resp.status != 200 or "access_token" not in payload:
-            logger.error("Обмен на long-lived токен не удался (HTTP %s): %s", resp.status, payload)
-            return None
-        return payload["access_token"]
+        if resp.status == 200 and "access_token" in payload:
+            logger.info("Long-lived токен получен (expires_in=%s)", payload.get("expires_in"))
+            return payload["access_token"]
+
+    logger.warning(
+        "Обмен на long-lived токен отклонён Meta (HTTP %s): %s — используем исходный токен",
+        resp.status, payload,
+    )
+    return short_lived_token
 
 
 async def fetch_ig_profile(session: aiohttp.ClientSession, access_token: str) -> dict | None:
-    params = {"fields": "user_id,username", "access_token": access_token}
-    async with session.get(f"{GRAPH_INSTAGRAM_BASE}/me", params=params) as resp:
-        payload = await resp.json(content_type=None)
-        if resp.status != 200 or "id" not in payload:
-            logger.error("Не удалось получить профиль Instagram (HTTP %s): %s", resp.status, payload)
-            return None
-        return payload
+    """Забирает профиль подключаемого аккаунта.
+
+    Пробует несколько вариантов эндпоинта: Meta развела Instagram Basic Display
+    и Instagram API with Instagram Login по разным путям/полям, а какой из них
+    примет конкретный токен — эмпирический вопрос (проверено curl'ом: сам путь
+    жив, но реальный токен на части вариантов получает "Unsupported request").
+    Первый успешный ответ и используем.
+    """
+    attempts = [
+        ("https://graph.instagram.com/me", "user_id,username"),
+        ("https://graph.instagram.com/me", "id,username"),
+        (f"{GRAPH_INSTAGRAM_BASE}/me", "user_id,username"),
+        ("https://graph.facebook.com/v25.0/me", "id,username"),
+    ]
+
+    for url, fields in attempts:
+        params = {"fields": fields, "access_token": access_token}
+        async with session.get(url, params=params) as resp:
+            payload = await resp.json(content_type=None)
+            if resp.status == 200:
+                # Instagram Login возвращает user_id, Basic Display — id.
+                account_id = payload.get("user_id") or payload.get("id")
+                if account_id:
+                    logger.info("Профиль получен через %s (fields=%s): %s", url, fields, payload)
+                    return {"id": str(account_id), "username": payload.get("username")}
+            logger.warning(
+                "Профиль не получен через %s (fields=%s), HTTP %s: %s", url, fields, resp.status, payload
+            )
+
+    logger.error("Ни один вариант эндпоинта профиля не сработал")
+    return None
 
 
 async def oauth_callback_handler(request: web.Request) -> web.Response:
@@ -145,9 +196,6 @@ async def oauth_callback_handler(request: web.Request) -> web.Response:
         return web.Response(text="Ошибка обмена токена", status=502)
 
     long_lived_token = await exchange_for_long_lived_token(session, token_entry["access_token"])
-    if long_lived_token is None:
-        await bot.send_message(tg_chat_id, "❌ Не удалось получить долгоживущий токен Instagram.")
-        return web.Response(text="Ошибка long-lived токена", status=502)
 
     profile = await fetch_ig_profile(session, long_lived_token)
     if profile is None:
