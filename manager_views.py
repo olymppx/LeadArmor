@@ -40,8 +40,8 @@ async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[s
     if client is None:
         return None
 
-    active_count = await db.count_active_media(client["ig_business_id"])
-    if active_count == 0:
+    total_count = await db.count_monitored_media(client["ig_business_id"])
+    if total_count == 0:
         text = (
             f"👋 <b>{html.escape(client['name'])}</b> подключён к LeadArmor!\n\n"
             "Остался один шаг: добавь пост, видео или рекламный креатив, под которым "
@@ -53,16 +53,23 @@ async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[s
         ]])
         return text, keyboard
 
+    active_count = await db.count_active_media(client["ig_business_id"])
     stats = await db.get_leads_stats_for_manager(manager_chat_id)
     recent = await db.get_recent_leads_for_manager(manager_chat_id, limit=5)
 
     lines = [
         f"📊 <b>Статистика {html.escape(client['name'])}</b>\n",
-        f"🟢 Запущенных постов: <b>{active_count}</b>",
+        f"🟢 Запущенных постов: <b>{active_count}</b> из {total_count}",
         f"Всего лидов: <b>{stats['total']}</b>",
         f"🌿 Органика: {stats['organic']}",
         f"🎯 Таргет: {stats['ad']}",
     ]
+
+    if total_count > active_count:
+        lines.append(
+            f"\n⚠️ {total_count - active_count} пост(ов) добавлено, но не запущено — "
+            "загляни в «📋 Все чат-боты» и нажми «🚀 ЗАПУСТИТЬ ЩИТ»."
+        )
 
     if recent:
         lines.append("\n<b>Последние лиды:</b>")

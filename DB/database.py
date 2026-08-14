@@ -276,6 +276,16 @@ class Database:
                 ig_business_id,
             )
 
+    async def count_monitored_media(self, ig_business_id: str) -> int:
+        # Не фильтрует по is_active — используется для "визард ли режим показывать",
+        # что отличается от count_active_media (сколько реально запущено).
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT COUNT(*) FROM monitored_media WHERE ig_business_id = $1",
+                ig_business_id,
+            )
+
     async def get_monitored_media(self, media_id: str) -> asyncpg.Record | None:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
