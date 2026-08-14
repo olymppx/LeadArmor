@@ -118,7 +118,11 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(f"<b>Ключевые слова:</b> {', '.join(keywords) if keywords else '—'}")
     lines.append(f"<b>Текст ответа:</b> {'настроен ✏️' if media_row['reply_text'] else 'по умолчанию'}")
     lines.append(f"<b>Thank-you текст:</b> {'настроен ✏️' if media_row['thank_you_text'] else 'по умолчанию'}")
-    lines.append(f"<b>Скрытие коммента под таргетом:</b> {'🙈 включено' if media_row['hide_comments'] else '👁 выключено'}")
+    if media_row["post_type_override"] == "organic":
+        hide_status_line = "неактуально — пост всегда органика, скрывать нечего"
+    else:
+        hide_status_line = "🙈 включено" if media_row["hide_comments"] else "👁 выключено"
+    lines.append(f"<b>Скрытие коммента под таргетом:</b> {hide_status_line}")
     lines.append(f"\n<b>Статус:</b> {status_label}")
 
     toggle_text = "⏸ Остановить щит" if media_row["is_active"] else "🚀 ЗАПУСТИТЬ ЩИТ"
