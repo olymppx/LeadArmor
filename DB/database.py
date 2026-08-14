@@ -114,6 +114,7 @@ ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS title TEXT;
 -- отдельный тумблер на карточке. DEFAULT TRUE сохраняет прежнее поведение
 -- для всех уже существующих постов, никто ничего не теряет молча.
 ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS hide_comments BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE monitored_media ADD COLUMN IF NOT EXISTS save_to_sheets BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- Удалено по прямому решению владельца: никаких "ИИ-агентов"/абстрактных
 -- диалогов в проекте, только жёсткий алгоритмический щит. Идемпотентный
@@ -436,6 +437,26 @@ class Database:
                 hide_comments,
             )
 
+    async def set_media_save_to_sheets(
+        self, manager_chat_id: int, media_id: str, save_to_sheets: bool
+    ) -> asyncpg.Record | None:
+        assert self.pool is not None
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(
+                """
+                UPDATE monitored_media
+                SET save_to_sheets = $3
+                FROM clients
+                WHERE monitored_media.media_id = $1
+                  AND monitored_media.ig_business_id = clients.ig_business_id
+                  AND clients.manager_chat_id = $2
+                RETURNING monitored_media.*;
+                """,
+                media_id,
+                manager_chat_id,
+                save_to_sheets,
+            )
+
     async def delete_monitored_media(self, manager_chat_id: int, media_id: str) -> bool:
         assert self.pool is not None
         async with self.pool.acquire() as conn:
@@ -586,7 +607,12 @@ class Database:
                           clients.manager_chat_id, clients.name AS client_name,
                           clients.google_sheet_id, clients.page_access_token,
                           (SELECT thank_you_text FROM monitored_media
-                           WHERE monitored_media.media_id = leads.ig_media_id) AS thank_you_text;
+                           WHERE monitored_media.media_id = leads.ig_media_id) AS thank_you_text,
+                          COALESCE(
+                              (SELECT save_to_sheets FROM monitored_media
+                               WHERE monitored_media.media_id = leads.ig_media_id),
+                              TRUE
+                          ) AS save_to_sheets;
                 """,
                 ig_business_id,
                 ig_user_id,

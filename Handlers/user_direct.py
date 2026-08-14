@@ -88,15 +88,18 @@ async def process_direct_message(
         updated_lead["id"], updated_lead["ig_username"], phone_number,
     )
 
-    await append_confirmed_lead(
-        sheet_id=updated_lead["google_sheet_id"],
-        client_name=updated_lead["client_name"],
-        ig_username=updated_lead["ig_username"],
-        phone_number=phone_number,
-        post_type=updated_lead["post_type"],
-        is_hidden=updated_lead["is_comment_removed"],
-        status=updated_lead["status"],
-    )
+    if updated_lead["save_to_sheets"]:
+        await append_confirmed_lead(
+            sheet_id=updated_lead["google_sheet_id"],
+            client_name=updated_lead["client_name"],
+            ig_username=updated_lead["ig_username"],
+            phone_number=phone_number,
+            post_type=updated_lead["post_type"],
+            is_hidden=updated_lead["is_comment_removed"],
+            status=updated_lead["status"],
+        )
+    else:
+        logger.info("Лид #%s: запись в Sheets отключена для этого поста — пропускаем", updated_lead["id"])
 
     thank_you_text = resolve_thank_you_text(updated_lead["thank_you_text"], updated_lead["ig_username"])
     logger.info("Резолвленный thank-you текст для client_id=%s: %r", updated_lead["client_id"], thank_you_text)

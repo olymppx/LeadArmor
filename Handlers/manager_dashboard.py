@@ -75,6 +75,10 @@ class ToggleHideCommentsCallback(CallbackData, prefix="toggle_hide"):
     media_id: str
 
 
+class ToggleSaveToSheetsCallback(CallbackData, prefix="toggle_sheets"):
+    media_id: str
+
+
 class DeleteMediaCallback(CallbackData, prefix="delete_media"):
     media_id: str
 
@@ -124,10 +128,15 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     else:
         hide_status_line = "🙈 включено" if media_row["hide_comments"] else "👁 выключено"
     lines.append(f"<b>Скрытие коммента под таргетом:</b> {hide_status_line}")
+    lines.append(
+        f"<b>Сохранение в Google Sheets:</b> "
+        f"{'✅ включено — лид попадёт в таблицу' if media_row['save_to_sheets'] else '🚫 выключено'}"
+    )
     lines.append(f"\n<b>Статус:</b> {status_label}")
 
     toggle_text = "⏸ Остановить пост" if media_row["is_active"] else "🚀 Запустить пост"
     hide_toggle_text = "👁 Не скрывать коммент" if media_row["hide_comments"] else "🙈 Скрывать коммент"
+    sheets_toggle_text = "🚫 Не сохранять в Sheets" if media_row["save_to_sheets"] else "✅ Сохранять в Sheets"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=toggle_text,
@@ -144,6 +153,10 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(
             text=hide_toggle_text,
             callback_data=ToggleHideCommentsCallback(media_id=media_row["media_id"]).pack(),
+        )],
+        [InlineKeyboardButton(
+            text=sheets_toggle_text,
+            callback_data=ToggleSaveToSheetsCallback(media_id=media_row["media_id"]).pack(),
         )],
         [InlineKeyboardButton(
             text="❌ Удалить пост из панели",
@@ -674,6 +687,32 @@ async def toggle_hide_comments_handler(
     text, keyboard = _build_media_card(updated)
     await callback.message.edit_text(text, reply_markup=keyboard)
     await _safe_answer(callback, "Скрытие включено 🙈" if updated["hide_comments"] else "Скрытие выключено 👁")
+
+
+@router.callback_query(ToggleSaveToSheetsCallback.filter())
+async def toggle_save_to_sheets_handler(
+    callback: CallbackQuery, callback_data: ToggleSaveToSheetsCallback, db: Database
+) -> None:
+    if callback.from_user is None:
+        return
+
+    current = await db.get_monitored_media(callback_data.media_id)
+    if current is None:
+        await _safe_answer(callback, "Пост не найден", show_alert=True)
+        return
+
+    updated = await db.set_media_save_to_sheets(
+        callback.from_user.id, callback_data.media_id, not current["save_to_sheets"]
+    )
+    if updated is None:
+        await _safe_answer(callback, "Доступ утерян", show_alert=True)
+        return
+
+    text, keyboard = _build_media_card(updated)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await _safe_answer(
+        callback, "Сохранение в Sheets включено ✅" if updated["save_to_sheets"] else "Сохранение в Sheets выключено 🚫"
+    )
 
 
 @router.callback_query(DeleteMediaCallback.filter())
