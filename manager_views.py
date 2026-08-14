@@ -68,7 +68,7 @@ async def build_manager_home_view(db: Database, manager_chat_id: int) -> tuple[s
     if total_count > active_count:
         lines.append(
             f"\n⚠️ {total_count - active_count} пост(ов) добавлено, но не запущено — "
-            "загляни в «📋 Все чат-боты» и нажми «🚀 ЗАПУСТИТЬ ЩИТ»."
+            "загляни в «📋 Все чат-боты» и нажми «🚀 Запустить пост»."
         )
 
     if recent:

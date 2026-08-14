@@ -125,7 +125,7 @@ def _build_media_card(media_row) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"<b>Скрытие коммента под таргетом:</b> {hide_status_line}")
     lines.append(f"\n<b>Статус:</b> {status_label}")
 
-    toggle_text = "⏸ Остановить щит" if media_row["is_active"] else "🚀 ЗАПУСТИТЬ ЩИТ"
+    toggle_text = "⏸ Остановить пост" if media_row["is_active"] else "🚀 Запустить пост"
     hide_toggle_text = "👁 Не скрывать коммент" if media_row["hide_comments"] else "🙈 Скрывать коммент"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
